@@ -95,7 +95,7 @@ class SubgroupPredictorBase(BaseEstimator):
                  verbose=0,
                  # class_weight=None,
                  max_samples=None,
-                 search_strategy='bestfirst'):
+                 search_strategy='randomsubsets'):
 
         self.n_estimators = n_estimators
         self.max_depth = max_depth
@@ -107,7 +107,14 @@ class SubgroupPredictorBase(BaseEstimator):
         self.verbose = verbose
 #         self.class_weight = class_weight
         self.max_samples = max_samples
-        self.search_strategy=search_strategy
+        self.search_strategy = search_strategy
+
+        self.is_fitted_ = False
+        self.estimators_ = None
+        self.classes_ = None
+        self.target = None
+        self.n_features_ = None
+        self.n_samples = None
 
         self.size = 1
 
@@ -136,13 +143,13 @@ class SubgroupPredictorBase(BaseEstimator):
 
         self.max_features = max_features
 
-    def _apply(self, X):
+    def _apply(self, xy):
         """
-        Apply Subgroup Discovery to X and return the subgroup predictor.
+        Apply Subgroup Discovery to ``xy`` and return the subgroup predictor.
 
         Parameters
         ----------
-        X : {DataFrame} of shape (n_samples, n_features+1). It includes
+        xy : {DataFrame} of shape (n_samples, n_features+1). It includes
         ``n_features`` columns and one column with the target.
 
         Returns
@@ -154,9 +161,9 @@ class SubgroupPredictorBase(BaseEstimator):
         """
 
         if hasattr(self, "classes_"):
-            if len(self.classes_)>2:
+            if len(self.classes_) > 2:
                 self.target_name = np.random.choice(self.classes_)
-                X.target = (X.target == self.target_name)
+                xy.target = (xy.target == self.target_name)
             else:
                 self.target_name = True
 
@@ -164,7 +171,7 @@ class SubgroupPredictorBase(BaseEstimator):
             n_samples_bootstrap = _get_n_samples_bootstrap(
                 self.n_samples, self.max_samples
             )
-            X = X.sample(n=n_samples_bootstrap, replace=True)
+            xy = xy.sample(n=n_samples_bootstrap, replace=True)
 
         if self.search_strategy == 'bestfirst':
             self.ps_algorithm = ps.BestFirstSearch()
@@ -181,10 +188,10 @@ class SubgroupPredictorBase(BaseEstimator):
             msg = "Unknown pysubgroup Algorithm. Available options are: ['bestfirst', 'beam', 'apriori', 'randomsubsets']"
             raise ValueError(msg)
 
-        subsetcols = np.append( np.random.choice(self.n_features_, size=self.max_features, replace=False),
-                                self.n_features_ )
+        subsetcols = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
+                               self.n_features_)
 
-        subg, target = self._subgroup_discovery(X.iloc[:, subsetcols])
+        subg, target = self._subgroup_discovery(xy.iloc[:, subsetcols])
 
         return subg, target
 
@@ -204,12 +211,13 @@ class SubgroupPredictorBase(BaseEstimator):
         -------
         self : object
         """
-        # Check that X and y have correct shape
-        X, y = check_X_y(X, y)
-
         # Create dataframe to be used in the Subgroup Discovery task
-        Xy = X.copy()
-        Xy['target'] = y
+        xy = X.copy()
+        xy['target'] = y
+
+        # Check that X and y have correct shape
+        X, y = self._validate_data(X, y, multi_output=True,
+                                   accept_sparse="csc")
 
         # Store the classes seen during fit
         if hasattr(self, "classes_"):
@@ -220,14 +228,16 @@ class SubgroupPredictorBase(BaseEstimator):
         self.get_max_n_features()
 
         # backend = ['loky', 'multiprocessing', 'sequential', 'threading']
-        model_desc = Parallel(n_jobs=self.n_jobs, verbose = self.verbose, backend='loky')(
-                                   delayed(self._apply)(Xy) for _ in range(self.n_estimators))
+        model_desc = Parallel(n_jobs=self.n_jobs, verbose=self.verbose, backend='loky')(
+                                   delayed(self._apply)(xy) for _ in range(self.n_estimators))
 
         # Make self.target private
         self.target = [trgt for dsc, trgt in model_desc]
         self.estimators_ = [dsc for dsc, trgt in model_desc]
 
         self.estimators_ = [encodeSubgroup(sg) for sg in self.estimators_]
+
+        self.is_fitted_ = True
 
         return self
 
@@ -373,38 +383,39 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
     """
 
     def __init__(self,
-                 n_estimators=100, #*,
-                 #criterion="gini",
+                 n_estimators=100,
+                 # *,
+                 # criterion="gini",
                  max_depth=1,
-                 #min_samples_split=2,
-                 #min_samples_leaf=1,
-                 #min_weight_fraction_leaf=0.,
+                 # min_samples_split=2,
+                 # min_samples_leaf=1,
+                 # min_weight_fraction_leaf=0.,
                  max_features="auto",
-                 #max_leaf_nodes=None,
-                 #min_impurity_decrease=0.,
-                 #min_impurity_split=None,
+                 # max_leaf_nodes=None,
+                 # min_impurity_decrease=0.,
+                 # min_impurity_split=None,
                  bootstrap=True,
-                 #oob_score=False,
+                 # oob_score=False,
                  n_jobs=None,
                  random_state=None,
                  verbose=0,
-                 #warm_start=False,
-                 #class_weight=None,
-                 #ccp_alpha=0.0,
+                 # warm_start=False,
+                 # class_weight=None,
+                 # ccp_alpha=0.0,
                  max_samples=None,
                  random_flip_binary_target=0.0,
-                 search_strategy='bestfirst'):
+                 search_strategy='randomsubsets'):
         super().__init__(
             n_estimators=n_estimators,
-            #estimator_params=estimator_params,
+            # estimator_params=estimator_params,
             bootstrap=bootstrap,
-            #oob_score=oob_score,
+            # oob_score=oob_score,
             max_features=max_features,
             n_jobs=n_jobs,
             random_state=random_state,
             verbose=verbose,
-            #warm_start=warm_start,
-            #class_weight=class_weight,
+            # warm_start=warm_start,
+            # class_weight=class_weight,
             max_samples=max_samples,
             search_strategy=search_strategy)
 
@@ -421,23 +432,24 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
 
         self.size = 1
 
-    def _subgroup_discovery(self, X):
+    def _subgroup_discovery(self, xy):
 
-        # Because we can obtain different subgroups if we flip the target
+        # Subgroup discovery can yield different subgroups if the target is flipped
         if self.random_flip_binary_target > 0 and (random() < self.random_flip_binary_target):
             self.target_name = False
 
-        _SubgroupDiscoveryTarget = ps.BinaryTarget ('target', True)
+        _SubgroupDiscoveryTarget = ps.BinaryTarget('target', True)
 
-        _SubgroupDiscoverySearchspace = ps.create_selectors(X, ignore=['target'])
+        _SubgroupDiscoverySearchspace = ps.create_selectors(xy, ignore=['target'])
 
-        task = ps.SubgroupDiscoveryTask (
-            X,
-            _SubgroupDiscoveryTarget,
-            _SubgroupDiscoverySearchspace,
-            result_set_size = self.size,
-            depth = self.max_depth,
-            qf = ps.WRAccQF()
+        task = ps.SubgroupDiscoveryTask(
+            data=xy,
+            target=_SubgroupDiscoveryTarget,
+            search_space=_SubgroupDiscoverySearchspace,
+            result_set_size=self.size,
+            depth=self.max_depth,
+            qf=ps.WRAccQF(),
+            min_quality=0
         )
         result = self.ps_algorithm.execute(task)
 
@@ -449,7 +461,7 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
 
         return decoded_subg, target
 
-    def predict(self, X, threshold = None):
+    def predict(self, X, threshold=None):
 
         class_type = self.classes_[0].dtype
 
@@ -472,7 +484,7 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
         check_is_fitted(self)
 
         # Input validation
-        #X = check_array(X)
+        # X = check_array(X)
 
         # return predictions
         n_samples = X.shape[0]
@@ -535,37 +547,40 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
 class RandomSubgroupRegressor(SubgroupPredictorBase):
 
     def __init__(self,
-                 n_estimators=100, #*,
+                 n_estimators=100,
+                 # *,
                  criterion="average",
                  max_depth=1,
                  max_features="auto",
                  bootstrap=True,
-                 #oob_score=False,
+                 # oob_score=False,
                  n_jobs=None,
                  random_state=None,
                  verbose=0,
-                 #class_weight=None,
+                 # class_weight=None,
                  max_samples=None,
-                 QF_weight=1,
-                 QF='absolute',
+                 quality_function_weight=1,
+                 quality_function='absolute',
                  search_strategy='bestfirst'):
         super().__init__(
             n_estimators=n_estimators,
-            #estimator_params=estimator_params,
+            # estimator_params=estimator_params,
             bootstrap=bootstrap,
-            #oob_score=oob_score,
-            max_features = max_features,
+            # oob_score=oob_score,
+            max_features=max_features,
             n_jobs=n_jobs,
             random_state=random_state,
             verbose=verbose,
-            #warm_start=warm_start,
-            #class_weight=class_weight,
+            # warm_start=warm_start,
+            # class_weight=class_weight,
             max_samples=max_samples,
             search_strategy=search_strategy)
 
-        self.search_strategy=search_strategy
-        self.QF_weight = QF_weight
-        self.QF=QF
+        self.max_depth = max_depth
+
+        self.search_strategy = search_strategy
+        self.quality_function_weight = quality_function_weight
+        self.quality_function = quality_function
         self.criterion = criterion
 
         self.size = 1
@@ -576,21 +591,22 @@ class RandomSubgroupRegressor(SubgroupPredictorBase):
 
         _searchspace = ps.create_selectors(X, ignore=['target'])
 
-        if (self.QF == 'standard'):
-            _qf = ps.StandardQFNumeric(a=self.QF_weight, estimator=self.criterion)
-        elif (self.QF == 'absolute'):
-            _qf = ps.AbsoluteQFNumeric(a=self.QF_weight, estimator=self.criterion)
+        if self.quality_function == 'standard':
+            _qf = ps.StandardQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
+        elif self.quality_function == 'absolute':
+            _qf = ps.AbsoluteQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
         else:
             msg = "Unknown numeric quality measure! Available options are: ['standard', 'absolute']"
             raise ValueError(msg)
 
-        task = ps.SubgroupDiscoveryTask (
-            X,
-            _target_type,
-            _searchspace,
-            result_set_size = self.size,
-            depth = self.max_depth,
-            qf = _qf
+        task = ps.SubgroupDiscoveryTask(
+            data=X,
+            target=_target_type,
+            search_space=_searchspace,
+            result_set_size=self.size,
+            depth=self.max_depth,
+            qf=_qf,
+            min_quality=0
         )
         result = self.ps_algorithm.execute(task)
 
@@ -599,19 +615,19 @@ class RandomSubgroupRegressor(SubgroupPredictorBase):
         decoded_subg = decodeSubgroup(subgroup)
 
         idx = subgroup[1].covers(X)
-        target = [ np.mean(X.target[idx]), np.mean(X.target[np.invert(idx)]) ]
+        target = [np.mean(X.target[idx]), np.mean(X.target[np.invert(idx)])]
 
         return decoded_subg, target
 
     def predict(self, X):
 
-        #class_type = self.classes_[0].dtype
+        # class_type = self.classes_[0].dtype
 
         # Check is fit had been called
         check_is_fitted(self)
 
         # Input validation
-        #X = check_array(X)
+        # X = check_array(X)
 
         # return predictions
         n_samples = X.shape[0]
@@ -619,17 +635,16 @@ class RandomSubgroupRegressor(SubgroupPredictorBase):
         predictions = np.zeros(n_samples)
         counter = np.zeros(n_samples)
 
-        for i in range(0,self.n_estimators):
+        for i in range(0, self.n_estimators):
             idx = self.model[i].covers(X)
             predictions[idx] += self.target[i][0]
             counter[idx] += 1
 #             counter += 1
 #             predictions[np.invert(idx)] += self.target[i][1]
-            #predictions[idx == False] += self.complement_mean[i]
+            # predictions[idx == False] += self.complement_mean[i]
 
-        print(counter)
         predictions = predictions / counter
 
-        #predictions.astype(class_type)
+        # predictions.astype(class_type)
 
         return predictions

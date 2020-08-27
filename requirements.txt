@@ -1,4 +1,7 @@
 pandas
-numpy
-scikit-learn
-pysubgroup
+numpy~=1.19.1
+scikit-learn~=0.23.2
+pysubgroup~=0.7.0
+
+setuptools~=49.6.0
+joblib~=0.16.0
