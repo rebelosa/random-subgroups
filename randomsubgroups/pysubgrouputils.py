@@ -3,6 +3,7 @@ import pysubgroup as ps
 from itertools import chain
 from heapq import heappop, heappush
 import random
+import numpy as np
 
 
 def encodeSubgroup(decodedSubgroup):
@@ -64,8 +65,6 @@ setattr(ps, 'AbsoluteQFNumeric', ps.StandardQFNumeric)
 
 
 def standard_qf_numeric(a, _, mean_dataset, instances_subgroup, mean_sg):
-    print(mean_sg)
-    print(mean_dataset)
     return instances_subgroup ** a * np.abs(mean_sg - mean_dataset)
 
 

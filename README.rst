@@ -9,7 +9,7 @@ random-subgroups package - Making predictions with subgroups
 **random-subgroups** is a machine learning package compatible with scikit-learn_.
 
 It uses ensembles of weak estimators, as in random forests, for classification and
-regression tasks. The main difference from the other well-known approaches is that
+regression tasks. The main difference from the random forests algorithm is that
 it uses subgroups as estimators.
 
 .. _pysubgroup: https://github.com/flemmerich/pysubgroup/
@@ -23,7 +23,7 @@ Example of usage:
 from randomsubgroups import RandomSubgroupClassifier
 
 # Load the example dataset
-from pysubgroup.tests.DataSets import get_titanic_data
+from randomsubgroups.data import
 data = get_titanic_data()
 
 target = ps.BinaryTarget ('Survived', True)
