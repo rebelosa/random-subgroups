@@ -16,7 +16,7 @@ it uses subgroups as estimators.
 
 The subgroup discovery implementation of this package is made on top of the pysubgroup_ package. It
 uses many of the features from **pysubgroup** but it also extends it with different quality
-measures (more suitable for prediction) and different search strategies (e.g. RandomSubsetSearch())
+measures (more suitable for prediction) and different search strategies.
 
 
 Example of usage:

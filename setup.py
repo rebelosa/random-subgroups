@@ -1,27 +1,30 @@
 #! /usr/bin/env python
 """A template for scikit-learn compatible packages."""
 
-import codecs
 import os
 
 from setuptools import find_packages, setup
 
-# get __version__ from _version.py
+exec(open('randomsubgroups/_version.py').read())
 ver_file = os.path.join('randomsubgroups', '_version.py')
 with open(ver_file) as f:
     exec(f.read())
 
 DISTNAME = 'random-subgroups'
-DESCRIPTION = 'A package that includes a machine learning approach compatible with scikit-learn.'
-with codecs.open('README.rst', encoding='utf-8-sig') as f:
-    LONG_DESCRIPTION = f.read()
+DESCRIPTION = "Machine learning with Subgroup Discovery",
+LONG_DESCRIPTION = 'A package based on scikit learn that uses subgroup discovery for machine learning.'
+# with codecs.open('README.rst', encoding='utf-8-sig') as f:
+#     LONG_DESCRIPTION = f.read()
 MAINTAINER = 'C. Rebelo Sa'
-MAINTAINER_EMAIL = 'claudio84@gmail.com'
+MAINTAINER_EMAIL = 'c.f.pinho.rebelo.de.sa@liacs.leidenuniv.nl'
 URL = 'https://github.com/rebelosa/random-subgroups'
 LICENSE = 'new BSD'
 DOWNLOAD_URL = 'https://github.com/rebelosa/random-subgroups'
 VERSION = __version__
-INSTALL_REQUIRES = ['pandas', 'numpy', 'scikit-learn', 'pysubgroup']
+INSTALL_REQUIRES = ['pandas',
+                    'numpy',
+                    'scikit-learn',
+                    'pysubgroup']
 CLASSIFIERS = ['Intended Audience :: Science/Research',
                'Intended Audience :: Developers',
                'License :: OSI Approved',
@@ -32,7 +35,6 @@ CLASSIFIERS = ['Intended Audience :: Science/Research',
                'Operating System :: POSIX',
                'Operating System :: Unix',
                'Operating System :: MacOS',
-               'Programming Language :: Python :: 3.5',
                'Programming Language :: Python :: 3.6',
                'Programming Language :: Python :: 3.7']
 EXTRAS_REQUIRE = {
