@@ -19,11 +19,11 @@ def encode_subgroup(decoded_subgroup):
 
         if selector_type == 'IntervalSelector':
             conjunction.append(ps.subgroup_description.IntervalSelector(attribute_name,
-                                                            lower_bound=cond['lower_bound'],
-                                                            upper_bound=cond['upper_bound']))
+                               lower_bound=cond['lower_bound'],
+                               upper_bound=cond['upper_bound']))
         elif selector_type == 'EqualitySelector':
             conjunction.append(ps.subgroup_description.EqualitySelector(attribute_name,
-                                                            attribute_value=cond['attribute_value']))
+                               attribute_value=cond['attribute_value']))
         else:
             msg = "Unknown pysubgroup Selector type"
             raise ValueError(msg)
@@ -107,21 +107,23 @@ class BestFirstSearch2:
         result = []
         queue = [(float("-inf"), ps.Conjunction([]))]
         operator = ps.StaticSpecializationOperator2(task.search_space)
-        task.qf.calculate_constant_statistics(task)
+        task.qf.calculate_constant_statistics(task.data, task.target)
         while queue:
             q, old_description = heappop(queue)
             q = -q
-            if not (q > ps.minimum_required_quality(result, task)):
+            if not q > ps.minimum_required_quality(result, task):
                 break
             for candidate_description in operator.refinements(old_description):
                 sg = candidate_description
-                statistics = task.qf.calculate_statistics(sg, task.data)
-                ps.add_if_required(result, sg, task.qf.evaluate(sg, statistics), task)
-                optimistic_estimate = task.qf.optimistic_estimate(sg, statistics)
+                statistics = task.qf.calculate_statistics(sg, task.target, task.data)
+                ps.add_if_required(result, sg, task.qf.evaluate(sg, task.target, task.data, statistics), task, statistics=statistics)
+                if len(candidate_description) < task.depth:
+                    optimistic_estimate = task.qf.optimistic_estimate(sg, task.target, task.data, statistics)
 
-                # compute refinements and fill the queue
-                if len(candidate_description) < task.depth and optimistic_estimate >= ps.minimum_required_quality(result, task):
-                    heappush(queue, (-optimistic_estimate, candidate_description))
+                    # compute refinements and fill the queue
+                    if optimistic_estimate >= ps.minimum_required_quality(result, task):
+                        if ps.constraints_satisfied(task.constraints_monotone, candidate_description, statistics, task.data):
+                            heappush(queue, (-optimistic_estimate, candidate_description))
 
         result.sort(key=lambda x: x[0], reverse=True)
         return ps.SubgroupDiscoveryResult(result, task)
@@ -182,21 +184,25 @@ class BestFirstSearch3:
         result = []
         queue = [(float("-inf"), ps.Conjunction([]))]
         operator = ps.StaticSpecializationOperator3(task.search_space, max_features=self.max_features)
-        task.qf.calculate_constant_statistics(task)
+        task.qf.calculate_constant_statistics(task.data, task.target)
         while queue:
             q, old_description = heappop(queue)
             q = -q
-            if not (q > ps.minimum_required_quality(result, task)):
+            if not q > ps.minimum_required_quality(result, task):
                 break
             for candidate_description in operator.refinements(old_description):
                 sg = candidate_description
-                statistics = task.qf.calculate_statistics(sg, task.data)
-                ps.add_if_required(result, sg, task.qf.evaluate(sg, statistics), task)
-                optimistic_estimate = task.qf.optimistic_estimate(sg, statistics)
+                statistics = task.qf.calculate_statistics(sg, task.target, task.data)
+                ps.add_if_required(result, sg, task.qf.evaluate(sg, task.target, task.data, statistics), task,
+                                   statistics=statistics)
+                if len(candidate_description) < task.depth:
+                    optimistic_estimate = task.qf.optimistic_estimate(sg, task.target, task.data, statistics)
 
-                # compute refinements and fill the queue
-                if len(candidate_description) < task.depth and optimistic_estimate >= ps.minimum_required_quality(result, task):
-                    heappush(queue, (-optimistic_estimate, candidate_description))
+                    # compute refinements and fill the queue
+                    if optimistic_estimate >= ps.minimum_required_quality(result, task):
+                        if ps.constraints_satisfied(task.constraints_monotone, candidate_description, statistics,
+                                                    task.data):
+                            heappush(queue, (-optimistic_estimate, candidate_description))
 
         result.sort(key=lambda x: x[0], reverse=True)
         return ps.SubgroupDiscoveryResult(result, task)
