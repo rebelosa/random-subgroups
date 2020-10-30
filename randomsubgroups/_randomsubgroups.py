@@ -124,6 +124,8 @@ class SubgroupPredictorBase(BaseEstimator):
         self.n_features_ = None
         self.n_samples = None
 
+        self.column_names = None
+
         # self.balance_bins = balance_bins
 
     # This function 'get_max_n_features' is taken from sklearn.tree._classes
@@ -194,28 +196,26 @@ class SubgroupPredictorBase(BaseEstimator):
 
         if self.search_strategy == 'bestfirst':
             self.ps_algorithm = ps.BestFirstSearch()
+        elif self.search_strategy == 'oldbestfirst':
+            self.ps_algorithm = ps.OldBestFirstSearch()
         elif self.search_strategy == 'bestfirst2':
             self.ps_algorithm = ps.BestFirstSearch2()
         elif self.search_strategy == 'bestfirst3':
             self.ps_algorithm = ps.BestFirstSearch3(self.max_features)
         elif self.search_strategy == 'beam':
-            # TODO: Fix this error in pysubgroup
-            if is_regressor(self):
-                msg = "beam search from pysubgroup cannot be used with numeric targets. "
-                raise ValueError(msg)
             self.ps_algorithm = ps.BeamSearch()
         elif self.search_strategy == 'apriori':
             self.ps_algorithm = ps.Apriori()
         else:
-            msg = "Unknown pysubgroup search. Available options are: " \
+            msg = "Unknown search strategy. Available options are: " \
                   "['bestfirst', 'bestfirst2', 'bestfirst3', 'beam', 'apriori']"
             raise ValueError(msg)
 
-        subset_columns = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
-                                   self.n_features_)
+        # subset_columns = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
+        #                            self.n_features_)
 
-        subgroup, target = self._subgroup_discovery(xy.iloc[:, subset_columns])
-        # subgroup, target = self._subgroup_discovery(xy)
+        # subgroup, target = self._subgroup_discovery(xy.iloc[:, subset_columns])
+        subgroup, target = self._subgroup_discovery(xy)
 
         return subgroup, target
 
@@ -234,6 +234,7 @@ class SubgroupPredictorBase(BaseEstimator):
         Returns
         -------
         self : object
+
         """
         # random_state = check_random_state(self.random_state)
 
@@ -250,16 +251,16 @@ class SubgroupPredictorBase(BaseEstimator):
 
             y = y_encoded
 
-        # Create a dataframe to be used in the Subgroup Discovery task
+        # Check that x is a dataframe, if not then
+        # creates a dataframe to be used in the Subgroup Discovery task
+        if not isinstance(x, pd.DataFrame):
+            self.column_names = ['Col' + str(i) for i in range(1, x.shape[1] + 1)]
+            x = pd.DataFrame.from_records(x, columns=self.column_names)
+
         xy = x.copy()
         xy['target'] = y
 
-        # Check that X and y have correct shape
-        x, y = self._validate_data(x, y, multi_output=True,
-                                   accept_sparse="csc")
-
-        self.n_features_ = x.shape[1]
-        self.n_samples = x.shape[0]
+        self.n_samples, self.n_features_ = x.shape
         self.get_max_n_features()
 
         model_desc = Parallel(n_jobs=self.n_jobs, verbose=self.verbose, backend='loky')(
@@ -321,7 +322,7 @@ class SubgroupPredictorBase(BaseEstimator):
             for i in covered:
                 print(self.estimators_[i], "--->", target[i])
 
-            print("\n The targets of the subgroups used in the prediction have the following distribution:")
+            print("\nThe targets of the subgroups used in the prediction have the following distribution:")
             pd.Series(target_distribution).hist()
         else:
             print("No subgroups cover this example. The default prediction is used.")
@@ -337,12 +338,16 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
     `bootstrap=True` (default), otherwise the whole dataset is used to search
     for each subgroup.
 
-    The Parameters
-    -----------
+    Read more in https://pypi.org/project/random-subgroups/
+
+    Parameters
+    ----------
     n_estimators : int, default=100
         The number of subgroups in the ensemble.
+
     max_depth : int, default=1
         The maximum depth of the subgroup discovery task.
+
     max_features : {"auto", "sqrt", "log2"}, int or float, default="auto"
         The number of features to consider when looking for the best subgroup:
 
@@ -354,6 +359,7 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
         - If "sqrt", then `max_features=sqrt(n_features)` (same as "auto").
         - If "log2", then `max_features=log2(n_features)`.
         - If None, then `max_features=n_features`.
+
     bootstrap : bool, default=True
         Whether bootstrap samples are used when looking for subgroups. If False, the
         whole dataset is used to build each subgroup.
@@ -373,8 +379,8 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
         - If float, then draw `max_samples * X.shape[0]` samples. Thus,
           `max_samples` should be in the interval `(0, 1)`.
 
-    The Attributes
-    -----
+    Attributes
+    ----------
     base_estimator_ : Subgroup
         The child estimator template used to create the collection of fitted
         sub-estimators.
@@ -539,11 +545,13 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
             The class probabilities of the input samples. The order of the
             classes corresponds to that in the attribute :term:`classes_`.
         """
-
         # Check is fit had been called
         check_is_fitted(self)
 
         # Input validation
+        if not isinstance(x, pd.DataFrame):
+            # Create a dataframe to be used in the Subgroup Discovery task
+            x = pd.DataFrame.from_records(x, columns=self.column_names)
         # X = check_array(X)
         # self._validate_X_predict(X)
 
@@ -723,8 +731,10 @@ class RandomSubgroupRegressor(SubgroupPredictorBase):
             _qf = ps.StandardQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
         elif self.quality_function == 'absolute':
             _qf = ps.AbsoluteQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
+        elif self.quality_function == 'kl':
+            _qf = ps.KLDivergenceNumeric(a=self.quality_function_weight)
         else:
-            msg = "Unknown numeric quality measure! Available options are: ['standard', 'absolute']"
+            msg = "Unknown numeric quality measure! Available options are: ['standard', 'absolute', 'kl']"
             raise ValueError(msg)
 
         task = ps.SubgroupDiscoveryTask(
@@ -749,6 +759,8 @@ class RandomSubgroupRegressor(SubgroupPredictorBase):
     def predict(self, x, all_contribute=False):
 
         # class_type = self.classes_[0].dtype
+        if not isinstance(x, pd.DataFrame):
+            x = pd.DataFrame.from_records(x, columns=self.column_names)
 
         # Check is fit had been called
         check_is_fitted(self)

@@ -24,7 +24,7 @@ VERSION = __version__
 INSTALL_REQUIRES = ['pandas',
                     'numpy',
                     'scikit-learn',
-                    'pysubgroup']
+                    'pysubgroup==0.7.2']
 CLASSIFIERS = ['Intended Audience :: Science/Research',
                'Intended Audience :: Developers',
                'License :: OSI Approved',

@@ -209,3 +209,119 @@ class BestFirstSearch3:
 
 
 setattr(ps, 'BestFirstSearch3', BestFirstSearch3)
+
+
+# class MyQualityFunction:
+#     def calculate_constant_statistics(self, task):
+#         """ calculate_constant_statistics
+#         This function is called once for every execution,
+#         it should do any preparation that is necessary prior to an execution.
+#         """
+#         pass
+#
+#     def calculate_statistics(self, subgroup, data=None):
+#         """ calculates necessary statistics
+#         this statistics object is passed on to the evaluate
+#         and optimistic_estimate functions
+#         """
+#         pass
+#
+#     def evaluate(self, subgroup, statistics_or_data=None):
+#         """ return the quality calculated from the statistics """
+#         pass
+#
+#     def optimistic_estimate(self, subgroup, statistics=None):
+#         """ returns optimistic estimate
+#         if one is available return it otherwise infinity"""
+#         pass
+
+from sklearn.metrics import mutual_info_score
+from collections import namedtuple
+
+
+def kl_divergence(data_target, subgroup_target):
+    epsilon = 0.00001
+
+    pk = np.histogram(data_target)[0] + epsilon
+    pk = pk / sum(pk)
+    qk = np.histogram(subgroup_target)[0] + epsilon
+    qk = qk / sum(qk)
+    return np.sum(pk * np.log(pk / qk))
+
+
+class KLDivergenceNumeric(ps.BoundedInterestingnessMeasure):
+    tpl = namedtuple('KLDivergenceNumeric_parameters', ('size', 'target', 'estimate'))
+    @staticmethod
+    def weighted_mutual_info_score(a, _, target_dataset, instances_subgroup, target_subgroup):
+        return instances_subgroup ** a * kl_divergence(target_dataset, target_subgroup)
+        # return instances_subgroup ** a * (mean_sg - mean_dataset)
+
+    def __init__(self, a, invert=False):
+        self.a = a
+        self.invert = invert
+        self.required_stat_attrs = ('size', 'mean')
+        self.dataset_statistics = None
+        self.all_target_values = None
+        self.has_constant_statistics = False
+        # self.estimator = KLDivergenceNumeric.KLEstimator(self)
+
+    def calculate_constant_statistics(self, data, target):
+        # data = self.estimator.get_data(data, target)
+        self.all_target_values = data[target.target_variable].to_numpy()
+        data_size = len(data)
+        target_data = self.all_target_values
+        self.dataset_statistics = KLDivergenceNumeric.tpl(data_size, target_data, None)
+        self.has_constant_statistics = True
+
+    def evaluate(self, subgroup, target, data, statistics=None):
+        cover_arr, sg_size = ps.get_cover_array_and_size(subgroup, len(self.all_target_values), data)
+        if sg_size > 0:
+            sg_target_values = self.all_target_values[cover_arr]
+        else:
+            sg_target_values = []
+        # statistics = self.ensure_statistics(subgroup, target, data, statistics)
+        dataset = self.dataset_statistics
+        return KLDivergenceNumeric.weighted_mutual_info_score(self.a, dataset.size, dataset.target, sg_size,
+                                                     sg_target_values)
+
+    def calculate_statistics(self, subgroup, target, data, statistics=None):
+        cover_arr, sg_size = ps.get_cover_array_and_size(subgroup, len(self.all_target_values), data)
+        if sg_size > 0:
+            sg_target_values = self.all_target_values[cover_arr]
+            # sg_mean = np.mean(sg_target_values)
+            # estimate = self.estimator.get_estimate(subgroup, sg_size, sg_mean, cover_arr, sg_target_values)
+            estimate = float('inf')
+        else:
+            sg_target_values = []
+            estimate = float('-inf')
+        return KLDivergenceNumeric.tpl(sg_size, sg_target_values, estimate)
+
+    def optimistic_estimate(self, subgroup, target, data, statistics=None):
+        statistics = self.ensure_statistics(subgroup, target, data, statistics)
+        return statistics.estimate
+        # return float('-inf')
+
+
+    # class KLEstimator:
+    #     def __init__(self, qf):
+    #         self.qf = qf
+    #         self.indices_greater_mean = None
+    #         self.target_values_greater_mean = None
+
+        # def get_data(self, data, target):
+        #     return data
+
+        # def calculate_constant_statistics(self, data, target):  # pylint: disable=unused-argument
+        #     self.indices_greater_mean = self.qf.all_target_values > self.qf.dataset_statistics.mean
+        #     self.target_values_greater_mean = self.qf.all_target_values#[self.indices_greater_mean]
+
+        # def get_estimate(self, subgroup, sg_size, sg_mean, cover_arr, _):  # pylint: disable=unused-argument
+            # larger_than_mean = self.target_values_greater_mean[cover_arr][self.indices_greater_mean[cover_arr]]
+            # size_greater_mean = len(larger_than_mean)
+            # sum_greater_mean = np.sum(larger_than_mean)
+            #
+            # return sum_greater_mean - size_greater_mean * self.qf.dataset_statistics.mean
+            # return float('inf')
+
+setattr(ps, 'KLDivergenceNumeric', KLDivergenceNumeric)
+
