@@ -196,8 +196,6 @@ class SubgroupPredictorBase(BaseEstimator):
 
         if self.search_strategy == 'bestfirst':
             self.ps_algorithm = ps.BestFirstSearch()
-        elif self.search_strategy == 'oldbestfirst':
-            self.ps_algorithm = ps.OldBestFirstSearch()
         elif self.search_strategy == 'bestfirst2':
             self.ps_algorithm = ps.BestFirstSearch2()
         elif self.search_strategy == 'bestfirst3':
@@ -211,11 +209,12 @@ class SubgroupPredictorBase(BaseEstimator):
                   "['bestfirst', 'bestfirst2', 'bestfirst3', 'beam', 'apriori']"
             raise ValueError(msg)
 
-        # subset_columns = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
-        #                            self.n_features_)
-
-        # subgroup, target = self._subgroup_discovery(xy.iloc[:, subset_columns])
-        subgroup, target = self._subgroup_discovery(xy)
+        if self.search_strategy == 'bestfirst3':
+            subgroup, target = self._subgroup_discovery(xy)
+        else:
+            subset_columns = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
+                                       self.n_features_)
+            subgroup, target = self._subgroup_discovery(xy.iloc[:, subset_columns])
 
         return subgroup, target
 
@@ -729,6 +728,8 @@ class RandomSubgroupRegressor(SubgroupPredictorBase):
 
         if self.quality_function == 'standard':
             _qf = ps.StandardQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
+        elif self.quality_function == 'old':
+            _qf = ps.OldStandardQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
         elif self.quality_function == 'absolute':
             _qf = ps.AbsoluteQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
         elif self.quality_function == 'kl':
