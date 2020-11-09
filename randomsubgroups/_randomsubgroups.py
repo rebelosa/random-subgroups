@@ -214,7 +214,7 @@ class SubgroupPredictorBase(BaseEstimator):
         else:
             subset_columns = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
                                        self.n_features_)
-            subgroup, target = self._subgroup_discovery(xy.iloc[:, subset_columns])
+            subgroup, target = self._subgroup_discovery(xy.iloc[:, subset_columns].copy())
 
         return subgroup, target
 
@@ -474,7 +474,7 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
 
         # self.target_id = random_state.choice(self.n_classes_)
         self.target_id = np.random.choice(self.n_classes_)
-        xy.target = (xy.target == self.target_id)
+        xy.loc[:, 'target'] = (xy.loc[:, 'target'] == self.target_id)
 
         _target = ps.BinaryTarget(target_attribute='target', target_value=True)
 
