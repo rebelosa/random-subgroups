@@ -30,7 +30,7 @@ import numbers
 
 import pandas as pd
 from joblib import Parallel, delayed
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.base import is_classifier, is_regressor
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted  # , check_random_state
@@ -327,7 +327,7 @@ class SubgroupPredictorBase(BaseEstimator):
             print("No subgroups cover this example. The default prediction is used.")
 
 
-class RandomSubgroupClassifier(SubgroupPredictorBase):
+class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
     """
     A random subgroups classifier.
 
@@ -565,7 +565,7 @@ class RandomSubgroupClassifier(SubgroupPredictorBase):
         return proba
 
 
-class RandomSubgroupRegressor(SubgroupPredictorBase):
+class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
     """
     A random subgroups regressor.
 
