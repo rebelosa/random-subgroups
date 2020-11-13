@@ -27,6 +27,7 @@ Only single output problems are handled.
 
 
 import numbers
+import warnings
 
 import pandas as pd
 from joblib import Parallel, delayed
@@ -156,18 +157,16 @@ class SubgroupPredictorBase(BaseEstimator):
 
     def _check_estimator_output(self, result):
 
-        if len(result.to_descriptions()) > 0:
+        try:
             # Use the top ``n`` subgroup in the list result.to_descriptions()
             if self.result_set_size > 1:
-                # n = np.random.choice(len(result.to_descriptions()))
                 n = np.random.choice(len(result.to_descriptions()))
             else:
                 n = 0
             return result.to_descriptions()[n]
-        else:
-            # TODO: Allow that some estimators cannot find subgroups
-            msg = "Could not find subgroups for one or more estimators."
-            raise ValueError(msg)
+        except UserWarning:
+            warnings.warn("Could not find subgroups for one or more estimators.")
+            return None
 
     def _apply(self, xy):
         """
@@ -265,8 +264,8 @@ class SubgroupPredictorBase(BaseEstimator):
         model_desc = Parallel(n_jobs=self.n_jobs, verbose=self.verbose, backend='loky')(
             delayed(self._apply)(xy.copy()) for _ in range(self.n_estimators))
 
-        self.target = np.array([target for dsc, target in model_desc])
-        self.estimators_ = [dsc for dsc, target in model_desc]
+        self.target = np.array([target for dsc, target in model_desc if dsc is not None])
+        self.estimators_ = [dsc for dsc, target in model_desc if dsc is not None]
 
         self.estimators_ = [encode_subgroup(sg) for sg in self.estimators_]
 
@@ -279,18 +278,13 @@ class SubgroupPredictorBase(BaseEstimator):
         # Check if fit had been called
         check_is_fitted(self)
 
-        is_classification = is_classifier(self)
-        if is_classification:
+        if is_classifier(self):
             targets = self.target
         else:
             targets = self.target[:, 0]
 
-        id_sorted_targets = [x for x, y in sorted(enumerate(targets), key=lambda x: x[1])]
-
-        for i in id_sorted_targets:
-            target = round(targets[i], 3)
-            model = self.estimators_[i]
-            print(f"Target: {target}; Model: {model}")
+        [print(f"Target: {target}; Model: {model}") for target, model in
+         sorted(zip(targets, self.estimators_), key=lambda zp: zp[0])]
 
     def show_decision(self, x):
 
@@ -298,28 +292,23 @@ class SubgroupPredictorBase(BaseEstimator):
         check_is_fitted(self)
 
         x = pd.DataFrame(x).transpose()
-        covered = []
-        target_distribution = []
 
-        is_classification = is_classifier(self)
-        if is_classification:
+        if is_classifier(self):
             target = self.target
         else:
             target = self.target[:, 0]
 
-        for i, estimator in enumerate(self.estimators_):
-            if estimator.covers(x):
-                covered.append(i)
-                target_distribution.append(target[i])
+        estimator_target = filter(lambda zp: zp[0].covers(x), zip(self.estimators_, target))
 
-        if len(covered) > 0:
-            # pd.Series(covered).hist()
+        if len(estimator_target) > 0:
             print("The predicted value is:", self.predict(x))
-            print("From a total of", len(covered), "estimators.\n")
+            print("From a total of", len(estimator_target), "estimators.\n")
 
             print("The subgroups used in the prediction are:")
-            for i in covered:
-                print(self.estimators_[i], "--->", target[i])
+            target_distribution = []
+            for est, tgt in estimator_target:
+                target_distribution.append(tgt)
+                print(est, "--->", tgt)
 
             print("\nThe targets of the subgroups used in the prediction have the following distribution:")
             pd.Series(target_distribution).hist()
@@ -495,9 +484,13 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
         result = self.ps_algorithm.execute(task)
 
         subgroup = self._check_estimator_output(result)
-        decoded_subgroup = decode_subgroup(subgroup)
+        if subgroup is not None:
+            decoded_subgroup = decode_subgroup(subgroup)
 
-        target = int(self.target_id)
+            target = int(self.target_id)
+        else:
+            decoded_subgroup = None
+            target = None
 
         return decoded_subgroup, target
 
@@ -689,6 +682,8 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
             intervals_only=intervals_only)
 
         self.max_depth = max_depth
+        self.n_jobs = n_jobs
+        self.verbose = verbose
 
         self.quality_function_weight = quality_function_weight
         self.quality_function = quality_function
@@ -792,8 +787,9 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
             counter[predictions_missing] += 1
             default_prediction_percent = round(np.mean(predictions_missing)*100, 0)
             if default_prediction_percent > 5:
-                print("There are", str(default_prediction_percent), "% of default predictions. \n"
-                      "Consider increasing the number 'n_estimators'.")
+                if self.verbose:
+                    print("There are", str(default_prediction_percent), "% of default predictions. \n"
+                          "Consider increasing the number 'n_estimators'.")
 
         predictions = predictions / counter
 
