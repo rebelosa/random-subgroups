@@ -5,57 +5,7 @@ from heapq import heappop, heappush
 import random
 import numpy as np
 from pysubgroup import defaultdict
-
-
-def encode_subgroup(decoded_subgroup):
-
-    # score = decodedSubgroup['score']
-
-    conjunction = []
-    for cond in decoded_subgroup['conditions'].values():
-
-        attribute_name = cond['attribute_name']
-        selector_type = cond['selector_type']
-
-        if selector_type == 'IntervalSelector':
-            conjunction.append(ps.subgroup_description.IntervalSelector(attribute_name,
-                               lower_bound=cond['lower_bound'],
-                               upper_bound=cond['upper_bound']))
-        elif selector_type == 'EqualitySelector':
-            conjunction.append(ps.subgroup_description.EqualitySelector(attribute_name,
-                               attribute_value=cond['attribute_value']))
-        else:
-            msg = "Unknown pysubgroup Selector type"
-            raise ValueError(msg)
-
-    subgroup = ps.subgroup_description.Conjunction(conjunction)
-
-    return subgroup
-
-
-def decode_subgroup(subgroup):
-
-    decoded_subgroup = {'description': str(subgroup[1]), 'conditions': {}, 'score': subgroup[0]}
-
-    for i in range(len(subgroup[1]._selectors)):
-
-        condition = subgroup[1]._selectors[i]
-
-        decoded_subgroup['conditions'].update({i: {'attribute_name': condition._attribute_name}})
-
-        if issubclass(type(condition), ps.subgroup_description.IntervalSelector):
-            decoded_subgroup['conditions'][i].update({'lower_bound': condition._lower_bound,
-                                                      'upper_bound': condition._upper_bound})
-
-            selector_type = 'IntervalSelector'
-        elif issubclass(type(condition), ps.subgroup_description.EqualitySelector):
-            decoded_subgroup['conditions'][i].update({'attribute_value': condition._attribute_value})
-
-            selector_type = 'EqualitySelector'
-
-        decoded_subgroup['conditions'][i].update({'selector_type': selector_type})
-
-    return decoded_subgroup
+import warnings
 
 # Extending the class pysubgroup
 
