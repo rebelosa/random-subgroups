@@ -28,13 +28,13 @@ Only single output problems are handled.
 
 import numbers
 import warnings
-
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.base import is_classifier, is_regressor
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted  # , check_random_state
+from tqdm import trange
 
 from randomsubgroups.pysubgrouputils import *
 from randomsubgroups.subgroup import SubgroupPredictor
@@ -95,12 +95,14 @@ class SubgroupPredictorBase(BaseEstimator):
                  # oob_score=False,
                  n_jobs=None,
                  # random_state=None,
-                 verbose=0,
+                 verbose=1,
                  # class_weight=None,
                  max_samples=None,
                  search_strategy='bestfirst',
-                 result_set_size=1,
-                 intervals_only=True,
+                 fine_search=False,
+                 top_n=1,
+                 result_set_size=100,
+                 intervals_only=False,
                  n_bins=5):
 
         self.n_estimators = n_estimators
@@ -113,7 +115,11 @@ class SubgroupPredictorBase(BaseEstimator):
         self.verbose = verbose
         #         self.class_weight = class_weight
         self.max_samples = max_samples
+
+        # Subgroup Discovery parameters
         self.search_strategy = search_strategy
+        self.fine_search = fine_search
+        self.top_n = top_n
         self.result_set_size = result_set_size
         self.intervals_only = intervals_only
         self.n_bins = n_bins
@@ -157,15 +163,18 @@ class SubgroupPredictorBase(BaseEstimator):
 
     def _check_estimator_output(self, result):
 
-        try:
-            # Use the top ``n`` subgroup in the list result.to_descriptions()
-            if self.result_set_size > 1:
+        if len(result.to_descriptions()) > 0:
+
+            if len(result.to_descriptions()) > self.top_n:
+                # Randomly select from the the top_n subgroups in the list result.to_descriptions()
+                n = np.random.choice(self.top_n, 1, replace=False)[0]
+                # return [result.to_descriptions()[i] for i in n]
+            elif self.result_set_size > 1:
                 n = np.random.choice(len(result.to_descriptions()))
             else:
                 n = 0
-            return result.to_descriptions()[n]
-        except UserWarning:
-            warnings.warn("Could not find subgroups for one or more estimators.")
+            return [result.to_descriptions()[n]]
+        else:
             return None
 
     def _apply(self, xy):
@@ -193,22 +202,22 @@ class SubgroupPredictorBase(BaseEstimator):
             )
             xy = xy.sample(n=n_samples_bootstrap, replace=True)
 
-        if self.search_strategy == 'bestfirst':
-            self.ps_algorithm = ps.BestFirstSearch()
-        elif self.search_strategy == 'bestfirst2':
-            self.ps_algorithm = ps.BestFirstSearch2()
-        elif self.search_strategy == 'bestfirst3':
-            self.ps_algorithm = ps.BestFirstSearch3(self.max_features)
+        if self.search_strategy == 'static':
+            self.ps_algorithm = LightBestFirstSearch(max_features=self.max_features, fine_search=self.fine_search,
+                                                     discretization="static")
+        elif self.search_strategy == 'dynamic':
+            self.ps_algorithm = LightBestFirstSearch(max_features=self.max_features, n_bins=self.n_bins,
+                                                     intervals_only=self.intervals_only, discretization="dynamic")
         elif self.search_strategy == 'beam':
             self.ps_algorithm = ps.BeamSearch()
         elif self.search_strategy == 'apriori':
             self.ps_algorithm = ps.Apriori()
         else:
             msg = "Unknown search strategy. Available options are: " \
-                  "['bestfirst', 'bestfirst2', 'bestfirst3', 'beam', 'apriori']"
+                  "['static', 'dynamic', 'beam', 'apriori']"
             raise ValueError(msg)
 
-        if self.search_strategy == 'bestfirst3':
+        if self.search_strategy in ['static', 'dynamic']:
             subgroup_predictor = self._subgroup_discovery(xy)
         else:
             subset_columns = np.append(np.random.choice(self.n_features_, size=self.max_features, replace=False),
@@ -236,11 +245,9 @@ class SubgroupPredictorBase(BaseEstimator):
         """
         # random_state = check_random_state(self.random_state)
 
-        is_classification = is_classifier(self)
-
-        if is_classification:
+        if is_classifier(self):
             check_classification_targets(y)
-            y = np.copy(y)
+            # y = np.copy(y)
 
             # Store the classes seen during fit and encode y
             self.classes_, y_encoded = np.unique(y, return_inverse=True)
@@ -261,10 +268,15 @@ class SubgroupPredictorBase(BaseEstimator):
         self.n_samples, self.n_features_ = x.shape
         self.get_max_n_features()
 
-        model_desc = Parallel(n_jobs=self.n_jobs, verbose=self.verbose, backend='loky')(
-            delayed(self._apply)(xy.copy()) for _ in range(self.n_estimators))
+        model_desc = Parallel(n_jobs=self.n_jobs, verbose=0, backend='loky')(
+            delayed(self._apply)(xy.copy()) for _ in (trange(self.n_estimators)
+                                                      if self.verbose else range(self.n_estimators)))
 
-        self.estimators_ = [SubgroupPredictor.from_dict(subgroup) for subgroup in model_desc if subgroup is not None]
+        if any(model is None for model in model_desc):
+            warnings.warn("Could not find subgroups for one or more estimators.")
+
+        self.estimators_ = [SubgroupPredictor.from_dict(sg) for subgroup in model_desc if subgroup is not None for sg in
+                            subgroup]
 
         self.is_fitted_ = True
 
@@ -275,7 +287,7 @@ class SubgroupPredictorBase(BaseEstimator):
         # Check if fit had been called
         check_is_fitted(self)
 
-        [print(f"Target: {est.target}; Model: {est}") for est in
+        [print(f"Target: {estimator.target}; Model: {estimator}") for estimator in
          sorted(self.estimators_, key=lambda e: e.target)]
 
     def show_decision(self, x):
@@ -283,22 +295,44 @@ class SubgroupPredictorBase(BaseEstimator):
         # Check if fit had been called
         check_is_fitted(self)
 
-        x = pd.DataFrame(x).transpose()
+        # Input validation
+        # x = pd.DataFrame(x).transpose()
+        if not isinstance(x, pd.DataFrame):
+            # Create a dataframe to be used in the Subgroup Discovery task
+            x = pd.DataFrame.from_records((x,), columns=self.column_names)
 
-        covered_estimators = list(filter(lambda e: e.covers(x), self.estimators_))
+        covered_estimators = filter(lambda e: e.covers(x), self.estimators_)
+        covered_estimators = list(sorted(covered_estimators, key=lambda e: (e.target, e)))
 
         if len(covered_estimators) > 0:
+
             print("The predicted value is:", self.predict(x))
             print("From a total of", len(covered_estimators), "estimators.\n")
 
             print("The subgroups used in the prediction are:")
-            target_distribution = []
-            for estimator in covered_estimators:
-                target_distribution.append(estimator.target)
-                print(estimator, "--->", estimator.target)
 
-            print("\nThe targets of the subgroups used in the prediction have the following distribution:")
-            pd.Series(target_distribution).hist()
+            if is_classifier(self):
+                target_distribution = []
+                initial_target = -1
+                for estimator in covered_estimators:
+                    if estimator.target != initial_target:
+                        initial_target = estimator.target
+                        print("\n Predicting target {}".format(initial_target))
+                    target_distribution.append(estimator.target)
+                    print(estimator, "--->", estimator.target)
+                print("\nThe targets of the subgroups used in the prediction have the following distribution:")
+                pd.Series(target_distribution).value_counts().plot.pie()
+
+            elif is_regressor(self):
+                target_distribution = []
+                for estimator in covered_estimators:
+                    target_distribution.append(estimator.target)
+                    print(estimator, "--->", estimator.target)
+                print("\nThe targets of the subgroups used in the prediction have the following distribution:")
+                pd.Series(target_distribution).hist()
+            else:
+                msg = "Can only show decision for Classifier or Regression models"
+                raise ValueError(msg)
         else:
             print("No subgroups cover this example. The default prediction is used.")
 
@@ -404,40 +438,48 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
                  max_depth=1,
                  max_features="auto",
                  bootstrap=True,
-                 # oob_score=False,
                  n_jobs=None,
-                 # random_state=None,
-                 verbose=0,
-                 # class_weight=None,
+                 verbose=1,
                  max_samples=None,
+                 quality_function='standard',
                  quality_function_weight=0.5,
                  search_strategy='bestfirst',
-                 result_set_size=1,
-                 intervals_only=True,
+                 fine_search=False,
+                 top_n=1,
+                 result_set_size=100,
+                 intervals_only=False,
                  n_bins=5):
-        super().__init__(
-            n_estimators=n_estimators,
-            # estimator_params=estimator_params,
-            bootstrap=bootstrap,
-            # oob_score=oob_score,
-            max_features=max_features,
-            n_jobs=n_jobs,
-            # random_state=random_state,
-            verbose=verbose,
-            # class_weight=class_weight,
-            max_samples=max_samples,
-            search_strategy=search_strategy,
-            result_set_size=result_set_size,
-            intervals_only=intervals_only)
+        super().__init__()
+        # super().__init__(
+        #     n_estimators=n_estimators,
+        #     # estimator_params=estimator_params,
+        #     bootstrap=bootstrap,
+        #     # oob_score=oob_score,
+        #     max_features=max_features,
+        #     n_jobs=n_jobs,
+        #     # random_state=random_state,
+        #     verbose=verbose,
+        #     # class_weight=class_weight,
+        #     max_samples=max_samples,
+        #     search_strategy=search_strategy,
+        #     result_set_size=result_set_size,
+        #     intervals_only=intervals_only)
 
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.max_depth = max_depth
+        self.max_features = max_features
+        self.bootstrap = bootstrap
         self.n_jobs = n_jobs
         self.verbose = verbose
+
+        # Subgroup Discovery parameters
+        self.quality_function = quality_function
         self.quality_function_weight = quality_function_weight
 
         self.search_strategy = search_strategy
+        self.fine_search = fine_search
+        self.top_n = top_n
         self.result_set_size = result_set_size
         self.intervals_only = intervals_only
         self.n_bins = n_bins
@@ -449,15 +491,29 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
     def _subgroup_discovery(self, xy):
 
         # target_id = random_state.choice(self.n_classes_)
-        target_id = np.random.choice(self.n_classes_)
-        # real_target = xy.loc[:, 'target']
-        xy.loc[:, 'target'] = (xy.loc[:, 'target'] == target_id)
+        target_id = list(np.random.choice(self.n_classes_, 2, replace=False))
+        xy = xy.query("target == @target_id")
 
-        _target = ps.BinaryTarget(target_attribute='target', target_value=True)
+        _target = ps.BinaryTarget(target_attribute='target', target_value=target_id[0])
 
-        _search_space = ps.create_selectors(xy, ignore=['target'],
-                                            intervals_only=self.intervals_only,
-                                            nbins=self.n_bins)
+        if self.search_strategy != 'dynamic':
+            _search_space = ps.create_selectors(xy, ignore=['target'],
+                                                intervals_only=self.intervals_only,
+                                                nbins=self.n_bins)
+        else:
+            _search_space = []
+
+        if self.quality_function == 'standard':
+            _qf = ps.StandardQF(a=self.quality_function_weight)
+        # elif self.quality_function == 'chisquared':
+        #     _qf = ps.ChiSquaredQF()
+        # elif self.quality_function == 'kl':
+        #     _qf = ps.KLDivergenceNominal(a=self.quality_function_weight)
+        #
+        #     xy["real_target"] = real_target
+        else:
+            msg = "Unknown nominal quality measure! Available options are: ['standard']"
+            raise ValueError(msg)
 
         task = ps.SubgroupDiscoveryTask(
             data=xy,
@@ -465,15 +521,16 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
             search_space=_search_space,
             result_set_size=self.result_set_size,
             depth=self.max_depth,
-            qf=ps.StandardQF(a=self.quality_function_weight),
-            # qf=ps.ChiSquaredQF(),
+            qf=_qf,
             min_quality=0
         )
         result = self.ps_algorithm.execute(task)
 
         subgroup = self._check_estimator_output(result)
         if subgroup is not None:
-            decoded_subgroup_predictor = SubgroupPredictor(subgroup, target=int(target_id)).to_dict()
+            decoded_subgroup_predictor = [SubgroupPredictor(sg, target=target_id[0],
+                                                            alternative_target=target_id[1]).to_dict() for sg in subgroup]
+            # decoded_subgroup_predictor = SubgroupPredictor(subgroup, target=int(target_id)).to_dict()
         else:
             decoded_subgroup_predictor = None
 
@@ -537,6 +594,8 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
         proba = np.zeros((n_samples, self.n_classes_), dtype=np.float64)
         for estimator in self.estimators_:
             proba[estimator.covers(x), estimator.target] += 1
+            # if complement:
+            #     proba[np.invert(estimator.covers(x)), estimator.alternative_target] += 1
 
         proba = proba / self.n_estimators
 
@@ -629,76 +688,62 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
     >>> print(regr.predict([[0, 0, 0, 0]]))
     [-8.32987858]
     """
+
     def __init__(self,
                  n_estimators=100,
-                 # *,
-                 criterion="average",
                  max_depth=1,
                  max_features="auto",
                  bootstrap=True,
-                 # oob_score=False,
                  n_jobs=None,
-                 # random_state=None,
+                 random_state=None,
                  verbose=0,
-                 # class_weight=None,
                  max_samples=None,
                  quality_function_weight=0.5,
                  quality_function='absolute',
+                 criterion="average",
                  search_strategy='bestfirst',
-                 result_set_size=1,
+                 fine_search=False,
+                 top_n=1,
+                 result_set_size=100,
                  balance_bins=None,
-                 intervals_only=True,
+                 intervals_only=False,
                  n_bins=5):
-        super().__init__(
-            n_estimators=n_estimators,
-            # estimator_params=estimator_params,
-            max_depth=max_depth,
-            bootstrap=bootstrap,
-            # oob_score=oob_score,
-            max_features=max_features,
-            n_jobs=n_jobs,
-            # random_state=random_state,
-            verbose=verbose,
-            # warm_start=warm_start,
-            # class_weight=class_weight,
-            max_samples=max_samples,
-            search_strategy=search_strategy,
-            result_set_size=result_set_size,
-            intervals_only=intervals_only)
+        super().__init__()
 
+        self.n_estimators = n_estimators
         self.max_depth = max_depth
+        self.max_features = max_features
+        self.bootstrap = bootstrap
         self.n_jobs = n_jobs
+        self.random_state = random_state
         self.verbose = verbose
+        self.max_samples = max_samples
 
+        # Subgroup Discovery parameters
         self.quality_function_weight = quality_function_weight
         self.quality_function = quality_function
         self.criterion = criterion
 
         self.search_strategy = search_strategy
+        self.fine_search = fine_search
+        self.top_n = top_n
         self.result_set_size = result_set_size
         self.intervals_only = intervals_only
         self.n_bins = n_bins
 
         self._estimator_type = "regressor"
 
+        # Experimental
         self.balance_bins = balance_bins
+        # np.random.seed(self.random_state)
+        # print(np.random.get_state()[1][0])
 
     def _subgroup_discovery(self, xy):
 
         if self.balance_bins:
-            discrete_target = pd.cut(xy.target, self.balance_bins)
-            # print(discrete_target)
-            # q = (1 - pd.Series(discrete_target).value_counts(normalize=True))
-            # q = q / np.sum(q)
-            # q2 = np.zeros(self.bins)
-            # for i in range(self.bins):
-            #     q2[discrete_target ==
-            unique_discrete_target = discrete_target.unique()
-            target_a = np.random.choice(unique_discrete_target)
-            target_b = np.random.choice(unique_discrete_target)
-            idx = (discrete_target == target_a) | (discrete_target == target_b)
-            xy = xy[idx]
-            # print(np.mean(xy.target))
+            discrete_target = pd.cut(xy.target, self.balance_bins, labels=False)
+            (target_a, target_b) = np.random.choice(self.balance_bins, 2, replace=False)
+            xy = xy[(discrete_target == target_a) | (discrete_target == target_b)]
 
         _target = ps.NumericTarget('target')
 
@@ -731,14 +776,21 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
 
         subgroup = self._check_estimator_output(result)
 
-        idx = subgroup[1].covers(xy)
-        target = np.array([np.mean(xy.target[idx]), np.mean(xy.target[np.invert(idx)])])
-
-        decoded_subgroup_predictor = SubgroupPredictor(subgroup, target=target).to_dict()
+        if subgroup is not None:
+            decoded_subgroup_predictor = []
+            for sg in subgroup:
+                idx = sg[1].covers(xy)
+                target = int(np.mean(xy.target[idx]))
+                alternative_target = int(np.mean(xy.target[np.invert(idx)]))
+                decoded_subgroup_predictor.append(SubgroupPredictor(sg, target=target,
+                                                                    alternative_target=alternative_target).to_dict())
+                # decoded_subgroup_predictor = SubgroupPredictor(subgroup, target=target).to_dict()
+        else:
+            decoded_subgroup_predictor = None
 
         return decoded_subgroup_predictor
 
-    def predict(self, x, all_contribute=False):
+    def predict(self, x):
 
         # class_type = self.classes_[0].dtype
         if not isinstance(x, pd.DataFrame):
@@ -766,14 +818,14 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
 
         predictions_missing = (counter == 0)
         if any(predictions_missing):
-            default_prediction = np.mean([e.target_complement for e in self.estimators_])
+            default_prediction = np.mean([e.alternative_target for e in self.estimators_])
             predictions[predictions_missing] = default_prediction
             counter[predictions_missing] += 1
-            default_prediction_percent = round(np.mean(predictions_missing)*100, 0)
+            default_prediction_percent = round(np.mean(predictions_missing) * 100, 0)
             if default_prediction_percent > 5:
                 if self.verbose:
                     print("There are", str(default_prediction_percent), "% of default predictions. \n"
-                          "Consider increasing the number 'n_estimators'.")
+                                                                        "Consider increasing the number 'n_estimators'.")
 
         predictions = predictions / counter
 

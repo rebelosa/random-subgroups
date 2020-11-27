@@ -1,25 +1,21 @@
-from pysubgroup.subgroup_description import Conjunction
-from pysubgroup import ps
 import numpy as np
+from pysubgroup import ps
+from pysubgroup.subgroup_description import Conjunction
 
 
 def encode_subgroup(decoded_subgroup):
-    # score = decodedSubgroup['score']
 
     conjunction = []
-    for cond in decoded_subgroup['conditions'].values():
+    for attribute_name, cond in decoded_subgroup['conditions'].items():
 
-        attribute_name = cond['attribute_name']
         selector_type = cond['selector_type']
-
         if selector_type == 'IntervalSelector':
             conjunction.append(ps.subgroup_description.IntervalSelector(attribute_name,
                                                                         lower_bound=cond['lower_bound'],
                                                                         upper_bound=cond['upper_bound']))
         elif selector_type == 'EqualitySelector':
-            conjunction.append(ps.subgroup_description.EqualitySelector(attribute_name,
-                                                                        attribute_value=cond[
-                                                                            'attribute_value']))
+            for att_value in cond['attribute_value']:
+                conjunction.append(ps.subgroup_description.EqualitySelector(attribute_name, att_value))
         else:
             msg = "Unknown pysubgroup Selector type"
             raise ValueError(msg)
@@ -37,31 +33,27 @@ class SubgroupPredictor(Conjunction):
     def __init__(self,
                  subgroup,
                  target,
+                 alternative_target=None,
                  predict_complement=False
                  ):
         Conjunction.__init__(self, subgroup[1].selectors)
 
-        # self.selectors = selectors
+        self.target = target
+        self.alternative_target = alternative_target
         self.predict_complement = predict_complement
         self.score = subgroup[0]
-
-        if isinstance(target, int):
-            self.target = target
-        elif target.shape[0] == 2:
-            self.target_complement = target[1]
-            self.target = target[0]
-        else:
-            raise ValueError("Unknown subgroup estimator target shape.")
-        self.original_target = target
+        if predict_complement and alternative_target is None:
+            msg = "Cannot predict complement if alternative target is not given"
+            raise ValueError(msg)
 
     @classmethod
     def from_dict(cls, decoded_subgroup):
         subgroup = encode_subgroup(decoded_subgroup)
         target = decoded_subgroup['target']
 
-        return cls(subgroup, target)
+        return cls(subgroup, target=target, alternative_target=decoded_subgroup['alternative_target'])
 
-    def predict(self, x):
+    def predict(self, x, predict_complement=False):
         """
         Predict class for X.
 
@@ -84,36 +76,41 @@ class SubgroupPredictor(Conjunction):
         # check_is_fitted(self)
 
         predictions = np.array([None] * x.shape[0])
-        if not self.predict_complement:
-            predictions[self.covers(x)] = self.target
-        else:
-            covered_ids = self.covers(x)
-            predictions[covered_ids] = self.target
-            predictions[not covered_ids] = self.target_complement
+        covered_ids = self.covers(x)
+        predictions[covered_ids] = self.target
+        if predict_complement:
+            predictions[list(np.invert(covered_ids))] = self.alternative_target
 
         return predictions
 
     def to_dict(self):
 
         decoded_subgroup = {'description': self.__str__(), 'conditions': {},
-                            'score': self.score, 'target': self.original_target}
+                            'score': self.score, 'target': self.target, 'alternative_target': self.alternative_target}
 
-        for i in range(len(self._selectors)):
+        for condition in self._selectors:
 
-            condition = self._selectors[i]
-
-            decoded_subgroup['conditions'].update({i: {'attribute_name': condition._attribute_name}})
-
+            already_exists = condition._attribute_name in decoded_subgroup['conditions'].keys()
             if issubclass(type(condition), ps.subgroup_description.IntervalSelector):
-                decoded_subgroup['conditions'][i].update({'lower_bound': condition._lower_bound,
-                                                          'upper_bound': condition._upper_bound})
+                if already_exists:
+                    stored_condition = decoded_subgroup['conditions'][condition._attribute_name]
+                    lower_bound = max([condition._lower_bound, stored_condition['lower_bound']])
+                    upper_bound = min([condition._upper_bound, stored_condition['upper_bound']])
+                else:
+                    lower_bound = condition._lower_bound
+                    upper_bound = condition._upper_bound
 
-                selector_type = 'IntervalSelector'
+                decoded_subgroup['conditions'].update({condition._attribute_name: {'lower_bound': lower_bound,
+                                                                                   'upper_bound': upper_bound,
+                                                                                   'selector_type': 'IntervalSelector'}})
+
             elif issubclass(type(condition), ps.subgroup_description.EqualitySelector):
-                decoded_subgroup['conditions'][i].update({'attribute_value': condition._attribute_value})
-
-                selector_type = 'EqualitySelector'
-
-            decoded_subgroup['conditions'][i].update({'selector_type': selector_type})
+                if already_exists and decoded_subgroup['conditions'][condition._attribute_name]['selector_type'] == 'EqualitySelector':
+                    decoded_subgroup['conditions'][condition._attribute_name]['attribute_value'].append(
+                        condition._attribute_value)
+                else:
+                    decoded_subgroup['conditions'].update(
+                        {condition._attribute_name: {'attribute_value': [condition._attribute_value],
+                                                     'selector_type': 'EqualitySelector'}})
 
         return decoded_subgroup

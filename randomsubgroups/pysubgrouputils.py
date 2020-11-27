@@ -1,17 +1,22 @@
-import pysubgroup as ps
+"""
+    This extends the pysubgroup package classes
+"""
 
-from itertools import chain
-from heapq import heappop, heappush
+# Authors: Claudio Rebelo Sa <c.f.pinho.rebelo.de.sa@liacs.leidenuniv.nl>
+#
+# License: BSD 3 clause
+
 import random
-import numpy as np
-from pysubgroup import defaultdict
-import warnings
+from collections import namedtuple
+from heapq import heappop, heappush
+from itertools import chain, islice
 
-# Extending the class pysubgroup
+import numpy as np
+import pysubgroup as ps
+from pysubgroup import defaultdict, NumericTarget, BinaryTarget
+from scipy.stats import entropy
 
 # Create a new Numeric QM by cloning the StandardQFNumeric and then define the differences
-
-
 setattr(ps, 'AbsoluteQFNumeric', ps.StandardQFNumeric)
 
 
@@ -22,118 +27,159 @@ def standard_qf_numeric(a, _, mean_dataset, instances_subgroup, mean_sg):
 setattr(ps.AbsoluteQFNumeric, 'standard_qf_numeric', standard_qf_numeric)
 
 
-class StaticSpecializationOperator2:
+class StaticSpecializationOperatorWithMaxFeatures:
     """
-        This StaticSpecializationOperator is the same as the original
-        but it creates a search space that is more fine grained per attribute
-        (for this reason is much slower)
+        The StaticSpecializationOperatorWithMaxFeatures is an adapted version of the original
+        StaticSpecializationOperator which randomly selects a subset of the search space
+        when max_features is not None.
+
+        It can also allow the reuse of the same attributes when fine_search is True
     """
-    def __init__(self, selectors):
-        search_space_dict = defaultdict(list)
-        for selector in selectors:
-            search_space_dict[selector.__repr__()].append(selector)
-        self.search_space = list(search_space_dict.values())
-        self.search_space_index = {key: i for i, key in enumerate(search_space_dict.keys())}
 
-    def refinements(self, subgroup):
-        if subgroup.depth > 0:
-            index_of_last = self.search_space_index[subgroup._selectors[-1].__repr__()]
-            new_selectors = chain.from_iterable(self.search_space[index_of_last + 1:])
-        else:
-            new_selectors = chain.from_iterable(self.search_space)
+    def __init__(self, selectors, max_features=None, fine_search=False):
 
-        return (subgroup & sel for sel in new_selectors)
-
-
-setattr(ps, 'StaticSpecializationOperator2', StaticSpecializationOperator2)
-
-
-class BestFirstSearch2:
-    """
-    This BestfirstSearch is the same as the original
-    but it used StaticSpecializationOperator2() instead of StaticSpecializationOperator()
-    """
-    def execute(self, task):
-        result = []
-        queue = [(float("-inf"), ps.Conjunction([]))]
-        operator = ps.StaticSpecializationOperator2(task.search_space)
-        task.qf.calculate_constant_statistics(task.data, task.target)
-        while queue:
-            q, old_description = heappop(queue)
-            q = -q
-            if not q > ps.minimum_required_quality(result, task):
-                break
-            for candidate_description in operator.refinements(old_description):
-                sg = candidate_description
-                statistics = task.qf.calculate_statistics(sg, task.target, task.data)
-                ps.add_if_required(result, sg, task.qf.evaluate(sg, task.target, task.data, statistics), task, statistics=statistics)
-                if len(candidate_description) < task.depth:
-                    optimistic_estimate = task.qf.optimistic_estimate(sg, task.target, task.data, statistics)
-
-                    # compute refinements and fill the queue
-                    if optimistic_estimate >= ps.minimum_required_quality(result, task):
-                        if ps.constraints_satisfied(task.constraints_monotone, candidate_description, statistics, task.data):
-                            heappush(queue, (-optimistic_estimate, candidate_description))
-
-        result.sort(key=lambda x: x[0], reverse=True)
-        return ps.SubgroupDiscoveryResult(result, task)
-
-
-setattr(ps, 'BestFirstSearch2', BestFirstSearch2)
-
-
-class StaticSpecializationOperator3:
-    """
-        This StaticSpecializationOperator is the same as the original
-        but it searches for subsets of the attribute, as given by max_features
-    """
-    def __init__(self, selectors, max_features=None):
-        self.search_space_dict = defaultdict(list)
-        self.search_space_attributes = defaultdict(list)
-        for i, selector in enumerate(selectors):
-            self.search_space_dict[selector.__repr__()].append(selector)
-            self.search_space_attributes[selector.attribute_name].append([selector])
-        self.search_space = list(self.search_space_dict.values())
-        self.search_space_index = {key: i for i, key in enumerate(self.search_space_dict.keys())}
-        self.search_space_attributes_index = {key: i for i, key in enumerate(self.search_space_attributes.keys())}
         self.max_features = max_features
+        self.fine_search = fine_search
+
+        self.search_space_attributes = defaultdict(list)
+        if self.fine_search:
+            for selector in selectors:
+                self.search_space_attributes[selector.__repr__()].append([selector])
+        else:
+            for selector in selectors:
+                self.search_space_attributes[selector.attribute_name].append([selector])
 
     def refinements(self, subgroup):
-        search_space = self.search_space
 
         if self.max_features:
             if self.max_features > 0:
-                search_space_ids = random.sample(list(self.search_space_attributes_index), self.max_features)
-                search_space = [self.search_space_attributes[i] for i in search_space_ids]
+                if self.fine_search:
+                    subgroup_attributes = [s.__repr__() for s in subgroup._selectors]
+                else:
+                    subgroup_attributes = [s.attribute_name for s in subgroup._selectors]
+                subset_search_space = [att for att in self.search_space_attributes.keys() if
+                                       att not in subgroup_attributes]
+
+                if len(subset_search_space) > 0:
+                    max_subset = max(1, int(np.sqrt(len(subset_search_space))))
+                    subset_attributes = random.sample(subset_search_space, max_subset)
+                    search_space = [self.search_space_attributes[k] for k in subset_attributes]
+                else:
+                    search_space = []
             else:
                 msg = "'max_features' must be an int > 0 "
                 raise ValueError(msg)
 
         elif subgroup.depth > 0:
-            index_of_last = self.search_space_index[subgroup.__repr__()]
-            search_space = search_space[index_of_last + 1:]
+            if self.fine_search:
+                index_of_last = list(self.search_space_attributes.keys()).index(subgroup._selectors[-1].__repr__())
+            else:
+                index_of_last = list(self.search_space_attributes.keys()).index(subgroup._selectors[-1].attribute_name)
+            search_space = islice(self.search_space_attributes.values(), index_of_last + 1, None)
+        else:
+            search_space = self.search_space_attributes.values()
 
         new_selectors = chain.from_iterable(search_space)
 
         return (subgroup & sel for sel in new_selectors)
 
 
-setattr(ps, 'StaticSpecializationOperator3', StaticSpecializationOperator3)
-
-
-class BestFirstSearch3:
+class DynamicSpecializationOperatorWithMaxFeatures:
     """
-    This BestfirstSearch is the same as the original
-    but it used StaticSpecializationOperator3() instead of StaticSpecializationOperator()
+        This StaticSpecializationOperator is the same as the original
+        but it searches for subsets of the attribute when given by max_features
     """
     def __init__(self,
-                 max_features=None):
+                 data,
+                 min_size=2,
+                 n_bins=5,
+                 max_features=None,
+                 intervals_only=True):
+        self.data = data
+        self.min_size = min_size
+        self.n_bins = n_bins
         self.max_features = max_features
+        self.intervals_only = intervals_only
+
+    def refinements(self, subgroup):
+
+        if self.max_features:
+            subset_attributes = random.sample(list(self.data.drop(['target'], axis=1).columns), self.max_features)
+            # subset_attributes.append('target')
+            data_subset = self.data[subgroup.covers(self.data)][subset_attributes]
+        else:
+            data_subset = self.data.iloc[subgroup.covers(self.data), :]
+
+        selectors = ps.create_selectors(data_subset,
+                                        nbins=self.n_bins, ignore=['target'],
+                                        intervals_only=self.intervals_only)
+
+        search_space_dict = defaultdict(list)
+        for selector in selectors:
+            search_space_dict[selector.attribute_name].append(selector)
+
+        # if self.max_features:
+        #     if self.max_features > 0:
+        #         subgroup_attributes = [s.attribute_name for s in subgroup._selectors]
+        #         subset_search_space = [att for att in search_space_dict.keys() if
+        #                                att not in subgroup_attributes]
+        #         # subset_attributes = random.sample(subset_search_space, self.max_features)
+        #         if len(subset_search_space) > 0:
+        #             subset_attributes = random.sample(subset_search_space, 1)
+        #             # print(subset_attributes)
+        #             search_space = [search_space_dict[k] for k in subset_attributes]
+        #         else:
+        #             search_space = []
+        #     else:
+        #         msg = "'max_features' must be an int > 0 "
+        #         raise ValueError(msg)
+
+        if subgroup.depth > 0 and not self.max_features:
+            index_of_last = list(search_space_dict.keys()).index(subgroup._selectors[-1].attribute_name)
+            #             search_space = [att for i, att in enumerate(self.search_space_attributes.values()) if i > index_of_last]
+            search_space = islice(search_space_dict.values(), index_of_last + 1, None)
+        else:
+            search_space = search_space_dict.values()
+
+        new_selectors = chain.from_iterable(search_space)
+
+        return (subgroup & sel for sel in new_selectors)
+
+
+class LightBestFirstSearch:
+    """
+    This LightBestFirstSearch is a lighter version of the BestFirstSearch from pysubgroup package
+    and it uses both:
+     - StaticSpecializationOperatorWithMaxFeatures()
+     - DynamicSpecializationOperatorWithMaxFeatures()
+    instead of StaticSpecializationOperator()
+    """
+    def __init__(self,
+                 max_features=None,
+                 n_bins=5,
+                 intervals_only=True,
+                 fine_search=False,
+                 discretization="static"):
+        self.max_features = max_features
+        self.n_bins = n_bins
+        self.intervals_only = intervals_only
+        self.fine_search = fine_search
+        self.discretization = discretization
 
     def execute(self, task):
         result = []
         queue = [(float("-inf"), ps.Conjunction([]))]
-        operator = ps.StaticSpecializationOperator3(task.search_space, max_features=self.max_features)
+        if self.discretization == "static":
+            operator = StaticSpecializationOperatorWithMaxFeatures(task.search_space, max_features=self.max_features,
+                                                                   fine_search=self.fine_search)
+        elif self.discretization == "dynamic":
+            operator = DynamicSpecializationOperatorWithMaxFeatures(data=task.data, min_size=2,
+                                                     n_bins=self.n_bins, max_features=self.max_features,
+                                                     intervals_only=self.intervals_only)
+        else:
+            msg = "Discretization type not recognized. Only 'static' or 'dynamic' can be used"
+            raise ValueError(msg)
+
         task.qf.calculate_constant_statistics(task.data, task.target)
         while queue:
             q, old_description = heappop(queue)
@@ -141,66 +187,32 @@ class BestFirstSearch3:
             if not q > ps.minimum_required_quality(result, task):
                 break
             for candidate_description in operator.refinements(old_description):
-                sg = candidate_description
-                statistics = task.qf.calculate_statistics(sg, task.target, task.data)
-                ps.add_if_required(result, sg, task.qf.evaluate(sg, task.target, task.data, statistics), task,
-                                   statistics=statistics)
-                if len(candidate_description) < task.depth:
-                    optimistic_estimate = task.qf.optimistic_estimate(sg, task.target, task.data, statistics)
-
-                    # compute refinements and fill the queue
-                    if optimistic_estimate >= ps.minimum_required_quality(result, task):
-                        if ps.constraints_satisfied(task.constraints_monotone, candidate_description, statistics,
-                                                    task.data):
-                            heappush(queue, (-optimistic_estimate, candidate_description))
+                statistics = task.qf.calculate_statistics(candidate_description, task.target, task.data)
+                if ps.constraints_satisfied(task.constraints_monotone, candidate_description, statistics,
+                                            task.data):
+                    score_eval = task.qf.evaluate(candidate_description, task.target, task.data, statistics)
+                    if score_eval > q or q == float("inf"):
+                        ps.add_if_required(result, candidate_description, score_eval, task, statistics=statistics)
+                        if len(candidate_description) < task.depth:
+                            heappush(queue, (-score_eval, candidate_description))
 
         result.sort(key=lambda x: x[0], reverse=True)
         return ps.SubgroupDiscoveryResult(result, task)
 
 
-setattr(ps, 'BestFirstSearch3', BestFirstSearch3)
-
-
-# class MyQualityFunction:
-#     def calculate_constant_statistics(self, task):
-#         """ calculate_constant_statistics
-#         This function is called once for every execution,
-#         it should do any preparation that is necessary prior to an execution.
-#         """
-#         pass
-#
-#     def calculate_statistics(self, subgroup, data=None):
-#         """ calculates necessary statistics
-#         this statistics object is passed on to the evaluate
-#         and optimistic_estimate functions
-#         """
-#         pass
-#
-#     def evaluate(self, subgroup, statistics_or_data=None):
-#         """ return the quality calculated from the statistics """
-#         pass
-#
-#     def optimistic_estimate(self, subgroup, statistics=None):
-#         """ returns optimistic estimate
-#         if one is available return it otherwise infinity"""
-#         pass
-
-from sklearn.metrics import mutual_info_score
-from collections import namedtuple
-
-
 def kl_divergence(data_target, subgroup_target):
     epsilon = 0.00001
 
-    pk = np.histogram(data_target)[0] + epsilon
+    pk = np.histogram(subgroup_target)[0] + epsilon
     pk = pk / sum(pk)
-    qk = np.histogram(subgroup_target)[0] + epsilon
+    qk = np.histogram(data_target)[0] + epsilon
     qk = qk / sum(qk)
-    return np.sum(pk * np.log(pk / qk))
+    return entropy(pk, qk)
 
 
 class KLDivergenceNumeric(ps.BoundedInterestingnessMeasure):
     tpl = namedtuple('KLDivergenceNumeric_parameters', ('size', 'target', 'estimate'))
+
     @staticmethod
     def weighted_mutual_info_score(a, _, target_dataset, instances_subgroup, target_subgroup):
         return instances_subgroup ** a * kl_divergence(target_dataset, target_subgroup)
@@ -232,7 +244,7 @@ class KLDivergenceNumeric(ps.BoundedInterestingnessMeasure):
         # statistics = self.ensure_statistics(subgroup, target, data, statistics)
         dataset = self.dataset_statistics
         return KLDivergenceNumeric.weighted_mutual_info_score(self.a, dataset.size, dataset.target, sg_size,
-                                                     sg_target_values)
+                                                              sg_target_values)
 
     def calculate_statistics(self, subgroup, target, data, statistics=None):
         cover_arr, sg_size = ps.get_cover_array_and_size(subgroup, len(self.all_target_values), data)
@@ -266,12 +278,13 @@ class KLDivergenceNumeric(ps.BoundedInterestingnessMeasure):
         #     self.target_values_greater_mean = self.qf.all_target_values#[self.indices_greater_mean]
 
         # def get_estimate(self, subgroup, sg_size, sg_mean, cover_arr, _):  # pylint: disable=unused-argument
-            # larger_than_mean = self.target_values_greater_mean[cover_arr][self.indices_greater_mean[cover_arr]]
-            # size_greater_mean = len(larger_than_mean)
-            # sum_greater_mean = np.sum(larger_than_mean)
-            #
-            # return sum_greater_mean - size_greater_mean * self.qf.dataset_statistics.mean
-            # return float('inf')
+        # larger_than_mean = self.target_values_greater_mean[cover_arr][self.indices_greater_mean[cover_arr]]
+        # size_greater_mean = len(larger_than_mean)
+        # sum_greater_mean = np.sum(larger_than_mean)
+        #
+        # return sum_greater_mean - size_greater_mean * self.qf.dataset_statistics.mean
+        # return float('inf')
+
 
 setattr(ps, 'KLDivergenceNumeric', KLDivergenceNumeric)
 

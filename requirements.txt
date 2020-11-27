@@ -5,3 +5,7 @@ pysubgroup==0.7.2
 
 setuptools~=50.3.0
 joblib~=0.17.0
+sklearn~=0.0
+palmerpenguins~=0.1.4
+scipy~=1.5.2
+tqdm~=4.53.0
