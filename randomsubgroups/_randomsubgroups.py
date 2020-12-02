@@ -98,7 +98,7 @@ class SubgroupPredictorBase(BaseEstimator):
                  verbose=1,
                  # class_weight=None,
                  max_samples=None,
-                 search_strategy='bestfirst',
+                 search_strategy='static',
                  fine_search=False,
                  top_n=1,
                  result_set_size=100,
@@ -261,6 +261,8 @@ class SubgroupPredictorBase(BaseEstimator):
         if not isinstance(x, pd.DataFrame):
             self.column_names = ['Col' + str(i) for i in range(1, x.shape[1] + 1)]
             x = pd.DataFrame.from_records(x, columns=self.column_names)
+        else:
+            self.column_names = x.columns
 
         xy = x.copy()
         xy['target'] = y
@@ -443,7 +445,7 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
                  max_samples=None,
                  quality_function='standard',
                  quality_function_weight=0.5,
-                 search_strategy='bestfirst',
+                 search_strategy='static',
                  fine_search=False,
                  top_n=1,
                  result_set_size=100,
@@ -601,6 +603,26 @@ class RandomSubgroupClassifier(SubgroupPredictorBase, ClassifierMixin):
 
         return proba
 
+    def feature_importance(self, absolute=False):
+
+        # Check is fit had been called
+        check_is_fitted(self)
+
+        counter = {target: {att: 0 for att in self.column_names} for target in range(self.n_classes_)}
+        for e in self.estimators_:
+            for f in e.get_features():
+                counter[e.target][f] += 1
+
+        counter_df = pd.DataFrame().from_dict(counter)
+        counter_df.columns = self.classes_
+
+        print(counter_df.sum(axis=1)/len(self.estimators_))
+
+        if not absolute:
+            counter_df = counter_df / counter_df.sum(axis=0)
+
+        return counter_df
+
 
 class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
     """
@@ -700,8 +722,8 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
                  max_samples=None,
                  quality_function_weight=0.5,
                  quality_function='absolute',
-                 criterion="average",
-                 search_strategy='bestfirst',
+                 criterion='average',
+                 search_strategy='static',
                  fine_search=False,
                  top_n=1,
                  result_set_size=100,
@@ -753,8 +775,6 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
 
         if self.quality_function == 'standard':
             _qf = ps.StandardQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
-        elif self.quality_function == 'old':
-            _qf = ps.OldStandardQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
         elif self.quality_function == 'absolute':
             _qf = ps.AbsoluteQFNumeric(a=self.quality_function_weight, estimator=self.criterion)
         elif self.quality_function == 'kl':
@@ -780,8 +800,8 @@ class RandomSubgroupRegressor(SubgroupPredictorBase, RegressorMixin):
             decoded_subgroup_predictor = []
             for sg in subgroup:
                 idx = sg[1].covers(xy)
-                target = int(np.mean(xy.target[idx]))
-                alternative_target = int(np.mean(xy.target[np.invert(idx)]))
+                target = float(np.mean(xy.target[idx]))
+                alternative_target = float(np.mean(xy.target[np.invert(idx)]))
                 decoded_subgroup_predictor.append(SubgroupPredictor(sg, target=target,
                                                                     alternative_target=alternative_target).to_dict())
                 # decoded_subgroup_predictor = SubgroupPredictor(subgroup, target=target).to_dict()
