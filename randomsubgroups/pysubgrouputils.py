@@ -12,131 +12,135 @@ from heapq import heappop, heappush
 from itertools import chain, islice
 
 import numpy as np
+import pandas as pd
 import pysubgroup as ps
-from pysubgroup import defaultdict, NumericTarget, BinaryTarget
+from pysubgroup import BinaryTarget, defaultdict
+from pysubgroup.subgroup_description import EqualitySelector, IntervalSelector
 from scipy.stats import entropy
-
-# Create a new Numeric QM by cloning the StandardQFNumeric and then define the differences
-setattr(ps, 'AbsoluteQFNumeric', ps.StandardQFNumeric)
+import numbers
 
 
-def standard_qf_numeric(a, _, mean_dataset, instances_subgroup, mean_sg):
-    return instances_subgroup ** a * np.abs(mean_sg - mean_dataset)
+class QFNumeric(object):
+    tpl = namedtuple('QF_parameters', ('size', 'mean'))
 
+    def __init__(self, a, min_support=2):
+        if not isinstance(a, numbers.Number):
+            raise ValueError(f'a is not a number. Received a={a}')
+        self.a = a
+        self.dataset_statistics = None
+        self.all_target_values = None
+        self.has_constant_statistics = False
+        self.min_support = min_support
 
-setattr(ps.AbsoluteQFNumeric, 'standard_qf_numeric', standard_qf_numeric)
+    def calculate_constant_statistics(self, data, target):
+        self.all_target_values = data[target.target_variable].to_numpy()
+        target_mean = np.mean(self.all_target_values)
+        data_size = len(data)
+        self.dataset_statistics = QFNumeric.tpl(data_size, target_mean)
+        self.has_constant_statistics = True
 
-
-class StaticSpecializationOperatorWithMaxFeatures:
-    """
-        The StaticSpecializationOperatorWithMaxFeatures is an adapted version of the original
-        StaticSpecializationOperator which randomly selects a subset of the search space
-        when max_features is not None.
-
-        It can also allow the reuse of the same attributes when fine_search is True
-    """
-
-    def __init__(self, selectors, max_features=None, fine_search=False):
-
-        self.max_features = max_features
-        self.fine_search = fine_search
-
-        self.search_space_attributes = defaultdict(list)
-        if self.fine_search:
-            for selector in selectors:
-                self.search_space_attributes[selector.__repr__()].append([selector])
+    def evaluate(self, subgroup, target, data, statistics=None):
+        cover_arr = subgroup.covers(data)
+        subgroup_size = np.count_nonzero(cover_arr)
+        if subgroup_size >= self.min_support:
+            subgroup_target = self.all_target_values[cover_arr]
+            return self.get_score(self.dataset_statistics.size, self.all_target_values, subgroup_size, subgroup_target)
         else:
-            for selector in selectors:
-                self.search_space_attributes[selector.attribute_name].append([selector])
+            return float("-inf")
 
-    def refinements(self, subgroup):
+    def calculate_statistics(self, subgroup, data, cached_statistics=None):
+        return 0
 
-        if self.max_features:
-            if self.max_features > 0:
-                if self.fine_search:
-                    subgroup_attributes = [s.__repr__() for s in subgroup._selectors]
-                else:
-                    subgroup_attributes = [s.attribute_name for s in subgroup._selectors]
-                subset_search_space = [att for att in self.search_space_attributes.keys() if
-                                       att not in subgroup_attributes]
 
-                if len(subset_search_space) > 0:
-                    max_subset = max(1, int(np.sqrt(len(subset_search_space))))
-                    subset_attributes = random.sample(subset_search_space, max_subset)
-                    search_space = [self.search_space_attributes[k] for k in subset_attributes]
-                else:
-                    search_space = []
-            else:
-                msg = "'max_features' must be an int > 0 "
-                raise ValueError(msg)
+class AbsoluteNumeric(QFNumeric):
 
-        elif subgroup.depth > 0:
-            if self.fine_search:
-                index_of_last = list(self.search_space_attributes.keys()).index(subgroup._selectors[-1].__repr__())
-            else:
-                index_of_last = list(self.search_space_attributes.keys()).index(subgroup._selectors[-1].attribute_name)
-            search_space = islice(self.search_space_attributes.values(), index_of_last + 1, None)
-        else:
-            search_space = self.search_space_attributes.values()
+    def get_score(self, dataset_size, dataset_target, subgroup_size, subgroup_target):
+        # return (subgroup_size) ** self.a * np.abs(
+        #     np.mean(subgroup_target) - self.dataset_statistics.mean)
+        return (subgroup_size/self.dataset_statistics.size) ** self.a * np.abs(np.mean(subgroup_target) - self.dataset_statistics.mean)
 
-        new_selectors = chain.from_iterable(search_space)
 
-        return (subgroup & sel for sel in new_selectors)
+class StandardNumeric(QFNumeric):
+
+    def get_score(self, dataset_size, dataset_target, subgroup_size, subgroup_target):
+        # return (subgroup_size ** self.a) * (np.mean(subgroup_target) - self.dataset_statistics.mean)
+        return (subgroup_size/self.dataset_statistics.size) ** self.a * (np.mean(subgroup_target) - self.dataset_statistics.mean)
+
+
+class KLDivergenceNumeric(QFNumeric):
+
+    @staticmethod
+    def kl_divergence(data_target, subgroup_target):
+        epsilon = 0.00001
+
+        pk = np.histogram(subgroup_target)[0] + epsilon
+        pk = pk / sum(pk)
+        qk = np.histogram(data_target)[0] + epsilon
+        qk = qk / sum(qk)
+        return entropy(pk, qk)
+
+    def get_score(self, dataset_size, dataset_target, subgroup_size, subgroup_target):
+        # return subgroup_size ** self.a * self.kl_divergence(dataset_target, subgroup_target)
+        return (subgroup_size/self.dataset_statistics.size) ** self.a * self.kl_divergence(dataset_target, subgroup_target)
 
 
 class DynamicSpecializationOperatorWithMaxFeatures:
     """
-        This StaticSpecializationOperator is the same as the original
-        but it searches for subsets of the attribute when given by max_features
+        This SpecializationOperator is similar to
+        StaticSpecializationOperator except that in every
+        depth search it can reconstruct the intervals with the dynamic specialization.
+
+        It is therefore computationally more heavy than the static specialization.
     """
     def __init__(self,
                  data,
-                 min_size=2,
                  n_bins=5,
                  max_features=None,
-                 intervals_only=True):
+                 intervals_only=True,
+                 binning='ef',
+                 specialization='static',
+                 search_space=None):
         self.data = data
-        self.min_size = min_size
         self.n_bins = n_bins
         self.max_features = max_features
         self.intervals_only = intervals_only
+        self.binning = binning
+        self.specialization = specialization
+
+        if search_space:
+            self.search_space = search_space
+        elif specialization == 'static':
+            self.search_space = get_search_space(self.data, ignore=['target'],
+                                                 intervals_only=self.intervals_only,
+                                                 n_bins=self.n_bins,
+                                                 binning=self.binning)
+
+        self.columns = list(self.data.columns)
 
     def refinements(self, subgroup):
 
         if self.max_features:
-            subset_attributes = random.sample(list(self.data.drop(['target'], axis=1).columns), self.max_features)
-            # subset_attributes.append('target')
-            data_subset = self.data[subgroup.covers(self.data)][subset_attributes]
+            subset_attributes = random.sample(self.columns, self.max_features)
         else:
-            data_subset = self.data.iloc[subgroup.covers(self.data), :]
+            subset_attributes = self.columns
 
-        selectors = ps.create_selectors(data_subset,
-                                        nbins=self.n_bins, ignore=['target'],
-                                        intervals_only=self.intervals_only)
+        if self.specialization == 'static':
+            if self.max_features:
+                search_space_dict = {key: values for key, values in self.search_space.items()
+                                     if key in subset_attributes}
+            else:
+                search_space_dict = self.search_space
 
-        search_space_dict = defaultdict(list)
-        for selector in selectors:
-            search_space_dict[selector.attribute_name].append(selector)
+        elif self.specialization == 'dynamic':
+            data_subset = self.data[subgroup.covers(self.data)]
 
-        # if self.max_features:
-        #     if self.max_features > 0:
-        #         subgroup_attributes = [s.attribute_name for s in subgroup._selectors]
-        #         subset_search_space = [att for att in search_space_dict.keys() if
-        #                                att not in subgroup_attributes]
-        #         # subset_attributes = random.sample(subset_search_space, self.max_features)
-        #         if len(subset_search_space) > 0:
-        #             subset_attributes = random.sample(subset_search_space, 1)
-        #             # print(subset_attributes)
-        #             search_space = [search_space_dict[k] for k in subset_attributes]
-        #         else:
-        #             search_space = []
-        #     else:
-        #         msg = "'max_features' must be an int > 0 "
-        #         raise ValueError(msg)
+            search_space_dict = get_search_space(data_subset[subset_attributes], ignore=['target'],
+                                                 n_bins=self.n_bins,
+                                                 intervals_only=self.intervals_only,
+                                                 binning=self.binning)
 
         if subgroup.depth > 0 and not self.max_features:
             index_of_last = list(search_space_dict.keys()).index(subgroup._selectors[-1].attribute_name)
-            #             search_space = [att for i, att in enumerate(self.search_space_attributes.values()) if i > index_of_last]
             search_space = islice(search_space_dict.values(), index_of_last + 1, None)
         else:
             search_space = search_space_dict.values()
@@ -148,38 +152,32 @@ class DynamicSpecializationOperatorWithMaxFeatures:
 
 class LightBestFirstSearch:
     """
-    This LightBestFirstSearch is a lighter version of the BestFirstSearch from pysubgroup package
-    and it uses both:
-     - StaticSpecializationOperatorWithMaxFeatures()
-     - DynamicSpecializationOperatorWithMaxFeatures()
-    instead of StaticSpecializationOperator()
+    This LightBestFirstSearch is a lighter version of the BestFirstSearch from pysubgroup package:
+    https://github.com/flemmerich/pysubgroup/blob/master/pysubgroup/algorithms.py
+    This one, among other things, skips the optimistic estimates to improve the efficiency.
+    It uses the SpecializationOperator() instead of StaticSpecializationOperator()
     """
     def __init__(self,
                  max_features=None,
                  n_bins=5,
                  intervals_only=True,
-                 fine_search=False,
-                 discretization="static"):
+                 specialization="static",
+                 binning='ef'):
         self.max_features = max_features
         self.n_bins = n_bins
         self.intervals_only = intervals_only
-        self.fine_search = fine_search
-        self.discretization = discretization
+        self.specialization = specialization
+        self.binning = binning
 
     def execute(self, task):
         result = []
         queue = [(float("-inf"), ps.Conjunction([]))]
-        if self.discretization == "static":
-            operator = StaticSpecializationOperatorWithMaxFeatures(task.search_space, max_features=self.max_features,
-                                                                   fine_search=self.fine_search)
-        elif self.discretization == "dynamic":
-            operator = DynamicSpecializationOperatorWithMaxFeatures(data=task.data, min_size=2,
-                                                     n_bins=self.n_bins, max_features=self.max_features,
-                                                     intervals_only=self.intervals_only)
-        else:
-            msg = "Discretization type not recognized. Only 'static' or 'dynamic' can be used"
-            raise ValueError(msg)
 
+        operator = SpecializationOperator(data=task.data.drop(['target'], axis=1), n_bins=self.n_bins,
+                                          max_features=self.max_features,
+                                          intervals_only=self.intervals_only,
+                                          binning=self.binning, specialization=self.specialization,
+                                          search_space=task.search_space)
         task.qf.calculate_constant_statistics(task.data, task.target)
         while queue:
             q, old_description = heappop(queue)
@@ -187,104 +185,68 @@ class LightBestFirstSearch:
             if not q > ps.minimum_required_quality(result, task):
                 break
             for candidate_description in operator.refinements(old_description):
-                statistics = task.qf.calculate_statistics(candidate_description, task.target, task.data)
-                if ps.constraints_satisfied(task.constraints_monotone, candidate_description, statistics,
-                                            task.data):
-                    score_eval = task.qf.evaluate(candidate_description, task.target, task.data, statistics)
-                    if score_eval > q or q == float("inf"):
-                        ps.add_if_required(result, candidate_description, score_eval, task, statistics=statistics)
-                        if len(candidate_description) < task.depth:
-                            heappush(queue, (-score_eval, candidate_description))
+                score_eval = task.qf.evaluate(candidate_description, task.target, task.data, None)
+                ps.add_if_required(result, candidate_description, score_eval, task)
+                if len(candidate_description) < task.depth:
+                    heappush(queue, (-score_eval, candidate_description))
 
         result.sort(key=lambda x: x[0], reverse=True)
         return ps.SubgroupDiscoveryResult(result, task)
 
 
-def kl_divergence(data_target, subgroup_target):
-    epsilon = 0.00001
 
-    pk = np.histogram(subgroup_target)[0] + epsilon
-    pk = pk / sum(pk)
-    qk = np.histogram(data_target)[0] + epsilon
-    qk = qk / sum(qk)
-    return entropy(pk, qk)
-
-
-class KLDivergenceNumeric(ps.BoundedInterestingnessMeasure):
-    tpl = namedtuple('KLDivergenceNumeric_parameters', ('size', 'target', 'estimate'))
-
-    @staticmethod
-    def weighted_mutual_info_score(a, _, target_dataset, instances_subgroup, target_subgroup):
-        return instances_subgroup ** a * kl_divergence(target_dataset, target_subgroup)
-        # return instances_subgroup ** a * (mean_sg - mean_dataset)
-
-    def __init__(self, a, invert=False):
-        self.a = a
-        self.invert = invert
-        self.required_stat_attrs = ('size', 'mean')
-        self.dataset_statistics = None
-        self.all_target_values = None
-        self.has_constant_statistics = False
-        # self.estimator = KLDivergenceNumeric.KLEstimator(self)
-
-    def calculate_constant_statistics(self, data, target):
-        # data = self.estimator.get_data(data, target)
-        self.all_target_values = data[target.target_variable].to_numpy()
-        data_size = len(data)
-        target_data = self.all_target_values
-        self.dataset_statistics = KLDivergenceNumeric.tpl(data_size, target_data, None)
-        self.has_constant_statistics = True
-
-    def evaluate(self, subgroup, target, data, statistics=None):
-        cover_arr, sg_size = ps.get_cover_array_and_size(subgroup, len(self.all_target_values), data)
-        if sg_size > 0:
-            sg_target_values = self.all_target_values[cover_arr]
-        else:
-            sg_target_values = []
-        # statistics = self.ensure_statistics(subgroup, target, data, statistics)
-        dataset = self.dataset_statistics
-        return KLDivergenceNumeric.weighted_mutual_info_score(self.a, dataset.size, dataset.target, sg_size,
-                                                              sg_target_values)
-
-    def calculate_statistics(self, subgroup, target, data, statistics=None):
-        cover_arr, sg_size = ps.get_cover_array_and_size(subgroup, len(self.all_target_values), data)
-        if sg_size > 0:
-            sg_target_values = self.all_target_values[cover_arr]
-            # sg_mean = np.mean(sg_target_values)
-            # estimate = self.estimator.get_estimate(subgroup, sg_size, sg_mean, cover_arr, sg_target_values)
-            estimate = float('inf')
-        else:
-            sg_target_values = []
-            estimate = float('-inf')
-        return KLDivergenceNumeric.tpl(sg_size, sg_target_values, estimate)
-
-    def optimistic_estimate(self, subgroup, target, data, statistics=None):
-        statistics = self.ensure_statistics(subgroup, target, data, statistics)
-        return statistics.estimate
-        # return float('-inf')
+def get_search_space(data, n_bins=5, intervals_only=True, binning='ef', ignore=None):
+    if ignore is None:
+        ignore = []
+    search_space = {}
+    search_space.update({key: make_nominal_bins(values) for key, values in
+                        data.select_dtypes(exclude=['number']).iteritems() if key not in ignore})
+    search_space.update({key: make_numeric_bins(values, n_bins, intervals_only, binning) for key, values in
+                        data.select_dtypes(include=['number']).iteritems() if key not in ignore})
+    return search_space
 
 
-    # class KLEstimator:
-    #     def __init__(self, qf):
-    #         self.qf = qf
-    #         self.indices_greater_mean = None
-    #         self.target_values_greater_mean = None
-
-        # def get_data(self, data, target):
-        #     return data
-
-        # def calculate_constant_statistics(self, data, target):  # pylint: disable=unused-argument
-        #     self.indices_greater_mean = self.qf.all_target_values > self.qf.dataset_statistics.mean
-        #     self.target_values_greater_mean = self.qf.all_target_values#[self.indices_greater_mean]
-
-        # def get_estimate(self, subgroup, sg_size, sg_mean, cover_arr, _):  # pylint: disable=unused-argument
-        # larger_than_mean = self.target_values_greater_mean[cover_arr][self.indices_greater_mean[cover_arr]]
-        # size_greater_mean = len(larger_than_mean)
-        # sum_greater_mean = np.sum(larger_than_mean)
-        #
-        # return sum_greater_mean - size_greater_mean * self.qf.dataset_statistics.mean
-        # return float('inf')
+def jitter(a_series, noise_reduction=1000000):
+    return a_series + (np.random.random(len(a_series)) * a_series.std() / noise_reduction) - (
+                a_series.std() / (2 * noise_reduction))
 
 
-setattr(ps, 'KLDivergenceNumeric', KLDivergenceNumeric)
+def make_numeric_bins(data_col, n_bins=5, intervals_only=True, binning='ef'):
+    numeric_selectors = []
 
+    if binning == 'ew':
+        _, cut_points = pd.cut(data_col.values, n_bins+2, retbins=True, precision=3)
+    elif binning == 'ef':
+        _, cut_points = pd.qcut(data_col.values, n_bins+2, retbins=True, precision=3, duplicates='drop')
+    else:
+        msg = "Binning strategy must be equal width of equal frequency: ['ew', 'ef]"
+        print(msg)
+
+    cut_points = cut_points.tolist()[1:-1]
+
+    if intervals_only:
+        old_cutpoint = float("-inf")
+        for c in cut_points:
+            numeric_selectors.append(IntervalSelector(data_col.name, old_cutpoint, c))
+            old_cutpoint = c
+        numeric_selectors.append(IntervalSelector(data_col.name, old_cutpoint, float("inf")))
+    #             numeric_selectors.append(IntervalSelector(attr_name, float("-inf"), cutpoints[0]))
+    #             for i, c1 in enumerate(cutpoints):
+    #                 for c2 in cutpoints[(i+1):]:
+    # #                 for c2 in cutpoints[(i+1):][::-1]:
+    #                     numeric_selectors.append(IntervalSelector(attr_name, c1, c2))
+    #             numeric_selectors.append(IntervalSelector(attr_name, c1, float("inf")))
+    else:
+        for c in cut_points:
+            numeric_selectors.append(IntervalSelector(data_col.name, float("-inf"), c))
+            numeric_selectors.append(IntervalSelector(data_col.name, c, float("inf")))
+
+    # numeric_selectors = random.sample(numeric_selectors, len(numeric_selectors))
+    return numeric_selectors
+
+
+def make_nominal_bins(data_col):
+    nominal_selectors = []
+    for val in pd.unique(data_col):
+        nominal_selectors.append(EqualitySelector(data_col.name, val))
+    return nominal_selectors
