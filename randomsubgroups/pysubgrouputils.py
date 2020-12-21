@@ -84,7 +84,7 @@ class KLDivergenceNumeric(QFNumeric):
         return (subgroup_size/self.dataset_statistics.size) ** self.a * self.kl_divergence(dataset_target, subgroup_target)
 
 
-class DynamicSpecializationOperatorWithMaxFeatures:
+class SpecializationOperator:
     """
         This SpecializationOperator is similar to
         StaticSpecializationOperator except that in every
@@ -193,6 +193,15 @@ class LightBestFirstSearch:
         result.sort(key=lambda x: x[0], reverse=True)
         return ps.SubgroupDiscoveryResult(result, task)
 
+# def create_selectors(data, n_bins=5, intervals_only=True, binning='ef', ignore=None):
+#     if ignore is None:
+#         ignore = []
+#     search_space = []
+#     [search_space.extend(make_nominal_bins(values)) for key, values in
+#                         data.select_dtypes(exclude=['number']).iteritems() if key not in ignore]
+#     [search_space.extend(make_numeric_bins(values, n_bins, intervals_only, binning)) for key, values in
+#                         data.select_dtypes(include=['number']).iteritems() if key not in ignore]
+#     return search_space
 
 
 def get_search_space(data, n_bins=5, intervals_only=True, binning='ef', ignore=None):
