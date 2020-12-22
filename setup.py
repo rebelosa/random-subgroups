@@ -13,7 +13,7 @@ with open(ver_file) as f:
 DISTNAME = 'random-subgroups'
 DESCRIPTION = "Machine learning with Subgroup Discovery",
 LONG_DESCRIPTION = 'A package based on scikit learn that uses subgroup discovery for machine learning.'
-# with codecs.open('README.rst', encoding='utf-8-sig') as f:
+# with codecs.open('README.md', encoding='utf-8-sig') as f:
 #     LONG_DESCRIPTION = f.read()
 MAINTAINER = 'C. Rebelo Sa'
 MAINTAINER_EMAIL = 'c.f.pinho.rebelo.de.sa@liacs.leidenuniv.nl'
