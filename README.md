@@ -14,7 +14,7 @@ from **pysubgroup**, but it also extends it with different quality
 measures (more suitable for prediction) and different search strategies.
 
 
-### Example of usage:
+### Example of the classifier:
 ```python
 from randomsubgroups import RandomSubgroupClassifier
 from sklearn import datasets
@@ -83,4 +83,78 @@ Col20<15.63 AND Col27<0.20 ---> 1
 
 The targets of the subgroups used in the prediction have the following distribution:
 ```
-![output](example.png)
+![output](example_classification.png)
+
+
+### Example of the regressor:
+```python
+from randomsubgroups import RandomSubgroupRegressor
+from sklearn import datasets
+
+data = datasets.load_diabetes()
+y = data.target
+X = data.data
+
+sg_regressor = RandomSubgroupRegressor(n_estimators=30)
+
+sg_regressor.fit(X, y)
+```
+
+```python
+>>> sg_regressor.show_models()
+
+Target: 98.35; Model: Col2<-0.03 AND Col5<0.05
+Target: 104.24844720496894; Model: Col6>=-0.01 AND Col7<-0.00
+Target: 107.71686746987952; Model: Col6>=-0.02 AND Col7<-0.00
+Target: 109.73033707865169; Model: Col3<0.06 AND Col8<-0.01
+Target: 191.60625; Model: Col2>=0.00 AND Col3>=-0.03
+Target: 192.41304347826087; Model: Col3>=-0.02 AND Col7>=0.03
+Target: 199.28795811518324; Model: Col8>=0.01
+Target: 202.17094017094018; Model: Col3>=0.04 AND Col4>=-0.05
+Target: 206.8709677419355; Model: Col2>=0.02 AND Col7>=-0.04
+Target: 211.1290322580645; Model: Col2>=-0.02 AND Col8>=0.01
+Target: 212.44036697247705; Model: Col4>=-0.01 AND Col8>=0.03
+Target: 212.8655462184874; Model: Col7>=-0.00 AND Col8>=0.02
+Target: 213.66935483870967; Model: Col7>=-0.01 AND Col8>=0.03
+Target: 216.0079365079365; Model: Col3>=-0.02 AND Col6<-0.01
+Target: 218.92233009708738; Model: Col0>=-0.03 AND Col8>=0.03
+Target: 219.56435643564356; Model: Col2>=0.02 AND Col7>=-0.00
+Target: 220.40740740740742; Model: Col2>=0.02 AND Col6<-0.02
+Target: 220.46153846153845; Model: Col3>=-0.04 AND Col8>=0.03
+Target: 222.0222222222222; Model: Col8>=0.02 AND Col9>=0.01
+Target: 222.92592592592592; Model: Col2>=0.00 AND Col3>=0.03
+Target: 224.375; Model: Col6<0.00 AND Col9>=0.02
+Target: 224.3939393939394; Model: Col2>=0.02 AND Col7>=-0.00
+Target: 224.70833333333334; Model: Col3>=0.02 AND Col8>=0.01
+Target: 226.5257731958763; Model: Col2>=-0.00 AND Col8>=0.02
+Target: 233.0185185185185; Model: Col2>=0.02 AND Col7>=-0.00
+Target: 239.25882352941176; Model: Col2>=0.00 AND Col9>=0.02
+Target: 243.9375; Model: Col2>=0.03 AND Col3>=0.01
+Target: 247.63492063492063; Model: Col2>=-0.01 AND Col9>=0.05
+Target: 248.56756756756758; Model: Col2>=0.03 AND Col9>=0.02
+Target: 260.29411764705884; Model: Col2>=0.06 AND Col8>=-0.01
+```
+
+```python
+>>> sg_regressor.show_decision(X[0])
+
+The predicted value is: 220.93552644658507
+From a total of 12 estimators.
+
+The subgroups used in the prediction are:
+Col2>=0.00 AND Col3>=-0.03 ---> 191.60625
+Col8>=0.01 ---> 199.28795811518324
+Col2>=0.02 AND Col7>=-0.04 ---> 206.8709677419355
+Col2>=-0.02 AND Col8>=0.01 ---> 211.1290322580645
+Col3>=-0.02 AND Col6<-0.01 ---> 216.0079365079365
+Col2>=0.02 AND Col7>=-0.00 ---> 219.56435643564356
+Col2>=0.02 AND Col6<-0.02 ---> 220.40740740740742
+Col2>=0.02 AND Col7>=-0.00 ---> 224.3939393939394
+Col3>=0.02 AND Col8>=0.01 ---> 224.70833333333334
+Col2>=0.02 AND Col7>=-0.00 ---> 233.0185185185185
+Col2>=0.03 AND Col3>=0.01 ---> 243.9375
+Col2>=0.06 AND Col8>=-0.01 ---> 260.29411764705884
+
+The targets of the subgroups used in the prediction have the following distribution:
+```
+![output](example_regression.png)
