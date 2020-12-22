@@ -13,6 +13,11 @@ The subgroup discovery implementation of this package is made on top of the
 from **pysubgroup**, but it also extends it with different quality
 measures (more suitable for prediction) and different search strategies.
 
+### Installation:
+```commandline
+pip install random-subgroups
+```
+
 
 ### Example of the classifier:
 ```python
