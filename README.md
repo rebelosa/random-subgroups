@@ -34,7 +34,7 @@ sg_classifier.fit(X, y)
 ```
 
 ```python
->>> sg_classifier.show_models()
+>>> classifiers_df = sg_classifier.show_models()
 
 Target: 0; Model: Col26>=0.27 AND Col7>=0.06
 Target: 0; Model: Col3>=435.17 AND Col6>=0.11
@@ -106,7 +106,7 @@ sg_regressor.fit(X, y)
 ```
 
 ```python
->>> sg_regressor.show_models()
+>>> regressors_df = sg_regressor.show_models()
 
 Target: 98.35; Model: Col2<-0.03 AND Col5<0.05
 Target: 104.24844720496894; Model: Col6>=-0.01 AND Col7<-0.00
