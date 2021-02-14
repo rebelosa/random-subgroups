@@ -289,11 +289,17 @@ class SubgroupPredictorBase(BaseEstimator):
         check_is_fitted(self)
 
         if is_classifier(self):
-            [print(f"Target: {self.classes_[estimator.target]}; Model: {estimator}") for estimator in
-             sorted(self.estimators_, key=lambda e: e.target)]
+            sorted_list = [[self.classes_[estimator.target], estimator] for estimator in
+                           sorted(self.estimators_, key=lambda e: e.target)]
+        elif is_regressor(self):
+            sorted_list = [[estimator.target, estimator] for estimator in
+                           sorted(self.estimators_, key=lambda e: e.target)]
         else:
-            [print(f"Target: {estimator.target}; Model: {estimator}") for estimator in
-             sorted(self.estimators_, key=lambda e: e.target)]
+            msg = "Unknown type of model. Must be 'regressor' or 'classifier'"
+            raise ValueError(msg)
+
+        [print(f"Target: {target}; Model: {estimator}") for target, estimator in sorted_list]
+        return pd.DataFrame(sorted_list, columns=["Target", "Model"])
 
     def show_decision(self, x):
 
